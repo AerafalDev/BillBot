@@ -5,7 +5,6 @@ from DBDofusUnity.dofus_unity_reader.models.datas.spell_levels_root import Spell
 from src.core.engine.contexts import AttackContext
 from src.core.engine.fights.attack.rejection_stat import RejectionStat
 from src.core.engine.fights.los_detector import LosDetector
-from src.core.engine.fights.spell import does_spell_need_test_los
 from src.core.engine.fights.spell_modifier import SpellModifiers
 
 
@@ -20,22 +19,29 @@ def can_cast_spell_on_mp(
     rejection_stats: dict[RejectionStat, int],
 ) -> bool:
     targetable_mp_data = MapReader().get_cell_data_by_cell_id(context.map_id, mp.cell_id)
-    if not targetable_mp_data.mov or not targetable_mp_data.los:
+    if not targetable_mp_data.mov:
         rejection_stats[RejectionStat.CELL_NOT_WALKABLE] += 1
         return False
 
-    count_casted = context.count_casted_by_spell_id_on_current_turn.get(spell_lvl.spellId)
     entity_id = entities_id_by_mp.get(mp)
-    if (
-        count_casted is not None
-        and entity_id is not None
-        and modifiers.max_cast_per_target != 0
-        and modifiers.max_cast_per_target <= count_casted
+    if modifiers.needs_free_cell and entity_id is not None:
+        rejection_stats[RejectionStat.CELL_NOT_FREE] += 1
+        return False
+    if modifiers.needs_visible_entity and (
+        entity_id is None or mp.cell_id in context.invisible_enemy_cell_ids
     ):
-        rejection_stats[RejectionStat.MAX_CAST_PER_TARGET] += 1
+        rejection_stats[RejectionStat.TARGET_NOT_VISIBLE] += 1
         return False
 
-    if does_spell_need_test_los(spell_lvl) and not LosDetector.los_between(
+    if entity_id is not None and modifiers.max_cast_per_target > 0:
+        count_casted_on_target = context.count_casted_by_spell_id_and_target_id.get(
+            (spell_lvl.spellId, entity_id), 0
+        )
+        if count_casted_on_target >= modifiers.max_cast_per_target:
+            rejection_stats[RejectionStat.MAX_CAST_PER_TARGET] += 1
+            return False
+
+    if modifiers.cast_test_los and not LosDetector.los_between(
         map_id=context.map_id,
         taken_mps=entities_mp,
         start=from_mp,

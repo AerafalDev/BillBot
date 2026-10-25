@@ -80,6 +80,7 @@ class AttackContext:
     primary_elem: EffectElement
     modifier_by_type_and_spell_id: dict[tuple[int, SpellModifierType], SpellModifier]
     count_casted_by_spell_id_on_current_turn: dict[int, int]
+    count_casted_by_spell_id_and_target_id: dict[tuple[int, int], int]
     cast_turn_by_spell_id: dict[int, int]
     fight_turn: int
     characteristic_by_id: dict[int, CharacterCharacteristic]
@@ -92,6 +93,7 @@ class AttackContext:
     invisible_enemy_cell_ids: frozenset[int]
     breed_id: int
     own_state_ids: frozenset[int]
+    own_rune_elements_by_cell: Mapping[int, frozenset[EffectElement]]
     own_active_stack_count_by_spell_id: dict[int, int]
     own_active_summon_count: int
     max_active_summon_count: int

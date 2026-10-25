@@ -29,11 +29,13 @@ class FightTurnBehavior(FightListenerBehavior):
     did_attack: bool = field(init=False, default=False)
     did_cast_support_spell: bool = field(init=False, default=False)
     last_cast_spell_id: int | None = field(init=False, default=None)
+    self_buff_spell_ids_casted: set[int] = field(init=False, default_factory=set[int])
 
     def run(self) -> None:
         self.did_attack = False
         self.did_cast_support_spell = False
         self.last_cast_spell_id = None
+        self.self_buff_spell_ids_casted.clear()
         self.event_manager.on(FightTurnEvent, lambda _: self.finish(), originator=self)
         self.register_fight_death_check()
         contexts = self._get_attack_context_or_finish()
@@ -79,9 +81,18 @@ class FightTurnBehavior(FightListenerBehavior):
             stage = 3
 
         if stage <= 3:
-            buff_spell = self.attack_selector.find_best_self_buff(attack_context)
+            buff_context = replace(
+                attack_context,
+                spells=[
+                    spell
+                    for spell in attack_context.spells
+                    if spell.spell_id not in self.self_buff_spell_ids_casted
+                ],
+            )
+            buff_spell = self.attack_selector.find_best_self_buff(buff_context)
             if buff_spell is not None:
-                return self._cast_self_spell(context, buff_spell, lambda: self._advance_turn(3))
+                self.self_buff_spell_ids_casted.add(buff_spell.spellId)
+                return self._cast_self_spell(context, buff_spell, lambda: self._advance_turn(1))
 
         if stage <= 4:
             support_action = self.breed_ability_selector.find_support_action(context)

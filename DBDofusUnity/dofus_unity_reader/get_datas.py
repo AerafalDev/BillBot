@@ -106,6 +106,15 @@ def _move_required_data_exports(temp_output_dir: Path) -> list[Path]:
     return output_paths
 
 
+def _bundle_has_missing_required_export(bundle_path: Path) -> bool:
+    bundle_name = bundle_path.name.casefold()
+    return any(
+        filename.removesuffix(".json").casefold() in bundle_name
+        and not (DATA_BUNDLES_ROOT / filename).is_file()
+        for filename in REQUIRED_DATA_FILENAMES
+    )
+
+
 def _remove_unneeded_data_exports() -> None:
     for path in _iter_json_files(DATA_BUNDLES_ROOT):
         if path.name not in REQUIRED_DATA_FILENAMES:
@@ -238,7 +247,7 @@ def get_datas(*, manifest: ExtractionManifest) -> None:
     for path in tqdm(sorted(PATH_DATAS.iterdir())):
         if not path.is_file():
             continue
-        if manifest.is_up_to_date(path):
+        if manifest.is_up_to_date(path) and not _bundle_has_missing_required_export(path):
             continue
         with tempfile.TemporaryDirectory(prefix=f"{path.stem}-", dir=DATA_BUNDLES_ROOT) as temp_dir:
             _run_uabea_batch_export(bundle_path=str(path), output_dir=temp_dir)

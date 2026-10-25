@@ -48,6 +48,7 @@ class FightActor:
     is_summoned: bool
     invisibility: FightInvisibilityState = FightInvisibilityState.VISIBLE
     state_id_by_effect_uid: dict[int, int] = field(default_factory=dict[int, int])
+    spell_id_by_state_effect_uid: dict[int, int] = field(default_factory=dict[int, int])
 
     @property
     def state_ids(self) -> frozenset[int]:
@@ -186,11 +187,37 @@ class EntityState(State):
                     is_summoned=is_summoned or (previous.is_summoned if previous else False),
                     invisibility=(previous.invisibility if previous else FightInvisibilityState.VISIBLE),
                     state_id_by_effect_uid=previous.state_id_by_effect_uid.copy() if previous else {},
+                    spell_id_by_state_effect_uid=(
+                        previous.spell_id_by_state_effect_uid.copy() if previous else {}
+                    ),
                 )
 
+    def set_fight_actor_state(self, target_id: int, effect_uid: int, state_id: int, spell_id: int) -> None:
+        actor_fight = self.actor_fight_by_id.get(target_id)
+        if actor_fight is None:
+            return
+        actor_fight.state_id_by_effect_uid[effect_uid] = state_id
+        actor_fight.spell_id_by_state_effect_uid[effect_uid] = spell_id
+
     def remove_fight_actor_effect(self, target_id: int, uid: int) -> None:
-        actor_fight = self.actor_fight_by_id[target_id]
+        actor_fight = self.actor_fight_by_id.get(target_id)
+        if actor_fight is None:
+            return
         actor_fight.state_id_by_effect_uid.pop(uid, None)
+        actor_fight.spell_id_by_state_effect_uid.pop(uid, None)
+
+    def remove_fight_actor_spell_states(self, target_id: int, spell_id: int) -> None:
+        actor_fight = self.actor_fight_by_id.get(target_id)
+        if actor_fight is None:
+            return
+        effect_uids = [
+            effect_uid
+            for effect_uid, active_spell_id in actor_fight.spell_id_by_state_effect_uid.items()
+            if active_spell_id == spell_id
+        ]
+        for effect_uid in effect_uids:
+            actor_fight.state_id_by_effect_uid.pop(effect_uid, None)
+            actor_fight.spell_id_by_state_effect_uid.pop(effect_uid, None)
 
     def set_fight_actor_invisibility(self, target_id: int, invisibility: FightInvisibilityState) -> None:
         actor_fight = self.actor_fight_by_id[target_id]
