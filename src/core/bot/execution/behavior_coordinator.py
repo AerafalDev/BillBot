@@ -10,6 +10,7 @@ from ankama_launcher_emulator.interfaces.credentials import (
     StoredApiKey,
 )
 from DBDofusUnity.dofus_unity_reader.models.datas.recipe_root import RecipeItem
+from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 
 from src.controller.bot_config import BotConfig
 from src.controller.settings import SettingsService
@@ -84,13 +85,20 @@ class BehaviorCoordinator(ContextualLogger):
             )
         )
 
-    def on_play_harvester(self, area_id: int | None, sub_area_id: int | None):
+    def on_play_harvester(
+        self,
+        area_id: int | None,
+        sub_area_id: int | None,
+        job_id: int | None,
+    ):
+        target_job_id = JobEnum(job_id) if job_id is not None else None
         self.play_action(
             lambda _progress_callback: self.harvester_behavior.start(
                 callback=lambda *_args: self.bot_signals.stop.emit(),
                 parent=None,
                 area_id=area_id,
                 sub_area_id=sub_area_id,
+                target_job_id=target_job_id,
             )
         )
 

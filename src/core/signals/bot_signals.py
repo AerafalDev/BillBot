@@ -2,7 +2,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 
 class BotSignals(QObject):
-    play_harvester = pyqtSignal(object, object)
+    play_harvester = pyqtSignal(object, object, object)
     play_fighter = pyqtSignal(object, object)
     play_auto_bot = pyqtSignal()
     play_crafter = pyqtSignal(object)

@@ -1,5 +1,6 @@
+from collections import defaultdict
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cache, cached_property
 
 from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import (
     InteractiveElement,
@@ -7,7 +8,7 @@ from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import (
 )
 from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
 from DBDofusUnity.dofus_unity_reader.data_center.map_reader import MapReader
-from DBDofusUnity.dofus_unity_reader.game_constants.job import HARVESTER_JOB_IDS
+from DBDofusUnity.dofus_unity_reader.game_constants.job import HARVESTER_JOB_IDS, JobEnum
 from DBDofusUnity.dofus_unity_reader.grid.map_point import MapPoint
 
 
@@ -17,6 +18,10 @@ class Collectable:
     interactive_element: InteractiveElement
     skill: InteractiveElement.InteractiveElementSkill
     resource_item_id: int
+
+    @cached_property
+    def job_id(self) -> JobEnum:
+        return JobEnum(DataReader().skill_by_id[self.skill.skill_id].parentJobId)
 
     def is_farmable(self, job_lvl: int) -> bool:
         related_skill_data = DataReader().skill_by_id[self.skill.skill_id]
@@ -39,6 +44,20 @@ class Collectable:
         if cell_id is None:
             raise ValueError("Player can't stand on a cell that have no id !")
         return MapPoint.from_cell_id(cell_id)
+
+
+@cache
+def get_resource_item_ids_by_job_id() -> dict[int, frozenset[int]]:
+    resource_item_ids_by_job_id: defaultdict[int, set[int]] = defaultdict(set)
+    for skill in DataReader().skill_by_id.values():
+        if skill.parentJobId not in HARVESTER_JOB_IDS or skill.gatheredRessourceItem <= 0:
+            continue
+        resource_item_ids_by_job_id[skill.parentJobId].add(skill.gatheredRessourceItem)
+
+    return {
+        job_id: frozenset(resource_item_ids)
+        for job_id, resource_item_ids in resource_item_ids_by_job_id.items()
+    }
 
 
 def get_stated_element_collectable(

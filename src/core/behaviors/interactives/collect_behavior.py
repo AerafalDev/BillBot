@@ -6,6 +6,8 @@ from functools import partial
 from DBDofusUnity.datas.protos.non_obf.game.interactive_element_pb2 import (
     StatedElementUpdatedEvent,
 )
+from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
+from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 
 from src.core.behaviors.behavior import Behavior
 from src.core.behaviors.interactives.interactive_behavior import (
@@ -41,11 +43,11 @@ class CollectBehavior(Behavior):
     is_first_collect: bool = field(init=False, default=False)
 
     excluded_element_ids: set[int] = field(init=False, default_factory=set[int])
-    target_resource_item_ids: set[int] | None = field(init=False, default=None)
+    target_job_id: JobEnum | None = field(init=False, default=None)
 
-    def run(self, target_resource_item_ids: set[int] | None = None) -> None:
+    def run(self, target_job_id: JobEnum | None = None) -> None:
         self.excluded_element_ids.clear()
-        self.target_resource_item_ids = target_resource_item_ids
+        self.target_job_id = target_job_id
         self.is_first_action = True
         self.is_first_collect = True
         self.collect_map()
@@ -55,11 +57,11 @@ class CollectBehavior(Behavior):
             return self.finish(CollectError.FULL_PODS)
 
         collectables = self.game_state.interactive.get_farmable_collectables(self.excluded_element_ids)
-        if self.target_resource_item_ids:
+        if self.target_job_id is not None:
             collectables = [
                 collectable
                 for collectable in collectables
-                if collectable.resource_item_id in self.target_resource_item_ids
+                if collectable.job_id == self.target_job_id
             ]
         if len(collectables) == 0:
             return self.finish()
@@ -140,7 +142,7 @@ class CollectBehavior(Behavior):
         self,
         collectables: list[Collectable],
     ) -> tuple[MovementPath, Collectable] | None:
-        near_coll_info: tuple[MovementPath, Collectable, float] | None = None
+        near_coll_info: tuple[MovementPath, Collectable, float, float] | None = None
         for collectable in collectables:
             coll_move_path = self.path_finding.get_interactive_near_path(
                 self.game_state.get_map_movement_context(),
@@ -155,9 +157,21 @@ class CollectBehavior(Behavior):
                 self.game_state.inventory.inventory_weight,
                 self.game_state.inventory.weight_max,
             )
-            if near_coll_info is None or near_coll_info[2] > coll_cost:
-                near_coll_info = (coll_move_path, collectable, coll_cost)
-                if coll_cost == 0:
+            if self.target_job_id is None:
+                score = -coll_cost
+            else:
+                item_level = DataReader().item_by_id[collectable.resource_item_id].level or 1
+                job_level = max(self.game_state.player.jobs_lvl_by_id.get(self.target_job_id, 1), 1)
+                level_bonus = 1 + min(item_level, job_level) / job_level
+                score = level_bonus / (1 + coll_cost)
+
+            if (
+                near_coll_info is None
+                or score > near_coll_info[2]
+                or (score == near_coll_info[2] and coll_cost < near_coll_info[3])
+            ):
+                near_coll_info = (coll_move_path, collectable, score, coll_cost)
+                if coll_cost == 0 and self.target_job_id is None:
                     break
 
         if near_coll_info is None:

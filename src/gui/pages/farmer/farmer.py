@@ -12,6 +12,7 @@ from qfluentwidgets import (
 
 from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
 from DBDofusUnity.dofus_unity_reader.data_center.i18n import I18N
+from DBDofusUnity.dofus_unity_reader.game_constants.job import HARVESTER_JOB_IDS, JobEnum
 from src.core import config
 from src.core.behaviors.behavior_factory import USABLE_BEHAVIORS
 from src.core.bot.bot import Bot
@@ -38,6 +39,7 @@ class FarmerWidget(QWidget):
     type_action_combo: ComboBox
     area_farm_combo: ComboBox
     sub_area_farm_combo: ComboBox
+    harvest_job_combo: ComboBox
 
     def __init__(
         self,
@@ -98,6 +100,17 @@ class FarmerWidget(QWidget):
 
         self.sub_area_farm_combo = ComboBox(top_widget)
 
+        self.harvest_job_combo = ComboBox(top_widget)
+        self.harvest_job_combo.addItem("All professions", userData=None)
+        for job_id in sorted(HARVESTER_JOB_IDS - {JobEnum.BASE}):
+            job = DataReader().job_by_id.get(job_id)
+            if job is None:
+                continue
+            self.harvest_job_combo.addItem(
+                I18N().name_by_id.get(job.nameId, "Unknown"),
+                userData=job_id,
+            )
+
         self.area_farm_combo = ComboBox(top_widget)
         self.area_farm_combo.addItem("")
         self.area_farm_combo.currentIndexChanged.connect(self.on_area_selected)
@@ -111,6 +124,7 @@ class FarmerWidget(QWidget):
         top_widget_layout.addWidget(self.area_farm_combo)
 
         top_widget_layout.addWidget(self.sub_area_farm_combo)
+        top_widget_layout.addWidget(self.harvest_job_combo)
 
         self._v_layout.addWidget(top_widget)
 
@@ -131,9 +145,11 @@ class FarmerWidget(QWidget):
         ]:
             self.area_farm_combo.setHidden(True)
             self.sub_area_farm_combo.setHidden(True)
+            self.harvest_job_combo.setHidden(True)
         else:
             self.area_farm_combo.setHidden(False)
             self.sub_area_farm_combo.setHidden(False)
+            self.harvest_job_combo.setHidden(current_action != FarmActionEnum.HARVESTER)
 
         if current_action in [CraftActionEnum.CRAFTER]:
             self.play_btn.setDisabled(True)
@@ -161,7 +177,7 @@ class FarmerWidget(QWidget):
         sub_area_id = self.sub_area_farm_combo.currentData()
         self.bot.bot_signals.play.emit(True)
         if self.type_action_combo.currentText() == FarmActionEnum.HARVESTER:
-            self.bot.bot_signals.play_harvester.emit(area_id, sub_area_id)
+            self.bot.bot_signals.play_harvester.emit(area_id, sub_area_id, self.harvest_job_combo.currentData())
         elif self.type_action_combo.currentText() == FarmActionEnum.FIGHTER:
             self.bot.bot_signals.play_fighter.emit(area_id, sub_area_id)
         elif self.type_action_combo.currentText() == FarmActionEnum.AUTO:
@@ -176,10 +192,17 @@ class FarmerWidget(QWidget):
         self.type_action_combo.setDisabled(True)
         self.area_farm_combo.setDisabled(True)
         self.sub_area_farm_combo.setDisabled(True)
+        self.harvest_job_combo.setDisabled(True)
 
-    @pyqtSlot(object, object)
-    def on_play_harvester(self, area_id: int | None, sub_area_id: int | None) -> None:
+    @pyqtSlot(object, object, object)
+    def on_play_harvester(
+        self,
+        area_id: int | None,
+        sub_area_id: int | None,
+        job_id: JobEnum | None,
+    ) -> None:
         self.type_action_combo.setCurrentText(FarmActionEnum.HARVESTER)
+        self.harvest_job_combo.setCurrentIndex(self.harvest_job_combo.findData(job_id))
         self.on_played_zone(area_id, sub_area_id)
 
     @pyqtSlot(object, object)
@@ -218,6 +241,7 @@ class FarmerWidget(QWidget):
         self.type_action_combo.setDisabled(False)
         self.area_farm_combo.setDisabled(False)
         self.sub_area_farm_combo.setDisabled(False)
+        self.harvest_job_combo.setDisabled(False)
 
     @pyqtSlot()
     def on_click_stop(self) -> None:

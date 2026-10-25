@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from context_pb2 import ContextCreationEvent
+from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 from DBDofusUnity.datas.protos.non_obf.game.gamemap_pb2 import (
     FightMapInformationEvent,
 )
@@ -23,11 +24,14 @@ class MultiFarmingBehavior(HarvesterBehavior):
         area_id: int | None,
         sub_area_id: int | None,
         is_stopped_at_new_map_condition: Callable[[], bool] | None = None,
-        target_resource_item_ids: set[int] | None = None,
+        target_job_id: JobEnum | None = None,
     ) -> None:
         self._next_time_attacker = datetime.now() + get_time_between_attacker(self.game_state.settings.do_fighter)
         return super().run(
-            area_id, sub_area_id, is_stopped_at_new_map_condition, target_resource_item_ids
+            area_id,
+            sub_area_id,
+            is_stopped_at_new_map_condition,
+            target_job_id,
         )
 
     def on_new_map(self):

@@ -42,6 +42,7 @@ def get_map_id_collectable_weight(
     storage_by_gid: dict[int, ObjectItemInventory],
     is_sub: bool,
     server_id: int = 1,
+    target_job_id: JobEnum | None = None,
 ) -> float:
     item_job_by_gfx = GameDataController().get_item_job_by_gfx()
     weight_map: float = 0
@@ -60,11 +61,16 @@ def get_map_id_collectable_weight(
         if info is None:
             continue
         item_id, job_id = info
+        if target_job_id is not None and job_id != target_job_id:
+            continue
         item = DataReader().item_by_id[item_id]
         job_lvl = player_job_lvl_by_id.get(job_id, 1)
         if item.level is None or item.level > job_lvl:
             continue
-        weight_item = get_weight_collectable(job_id, job_lvl, item_id, storage_by_gid, is_sub, server_id)
+        if target_job_id is None:
+            weight_item = get_weight_collectable(job_id, job_lvl, item_id, storage_by_gid, is_sub, server_id)
+        else:
+            weight_item = item.level
         weight_map += weight_item
     return weight_map
 

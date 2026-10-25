@@ -11,6 +11,7 @@ from DBDofusUnity.datas.protos.non_obf.game.inventory_pb2 import (
 )
 from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
 from DBDofusUnity.dofus_unity_reader.game_constants.item import ItemTypeEnum
+from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 from src.controller.game_data import GameDataController
 from src.core.behaviors.farms.base_farm_behavior import BaseFarmBehavior
 from src.core.behaviors.farms.fight.fight_behavior import FightBehavior
@@ -37,21 +38,21 @@ class HarvesterBehavior(BaseFarmBehavior):
     report_status: Callable[[str], None]
 
     map_ids_to_explore: set[int] = field(init=False, default_factory=set[int])
-    target_resource_item_ids: set[int] | None = field(init=False, default=None)
+    target_job_id: JobEnum | None = field(init=False, default=None)
 
     def run(
         self,
         area_id: int | None,
         sub_area_id: int | None,
         is_stopped_at_new_map_condition: Callable[[], bool] | None = None,
-        target_resource_item_ids: set[int] | None = None,
+        target_job_id: JobEnum | None = None,
     ) -> None:
         self.ensure_free_to_act(
             lambda: self.start_harvesting(
                 area_id=area_id,
                 sub_area_id=sub_area_id,
                 is_stopped_at_new_map_condition=is_stopped_at_new_map_condition,
-                target_resource_item_ids=target_resource_item_ids,
+                target_job_id=target_job_id,
             )
         )
 
@@ -60,21 +61,18 @@ class HarvesterBehavior(BaseFarmBehavior):
         area_id: int | None,
         sub_area_id: int | None,
         is_stopped_at_new_map_condition: Callable[[], bool] | None = None,
-        target_resource_item_ids: set[int] | None = None,
+        target_job_id: JobEnum | None = None,
     ) -> None:
-        self.target_resource_item_ids = target_resource_item_ids
+        self.target_job_id = target_job_id
         area_name = DataReader().area_by_id[area_id].nameId if area_id else "Unknown"
         subarea_name = DataReader().sub_area_by_id[sub_area_id].nameId if sub_area_id else "Unknown"
+        target_job_name = self.target_job_id.name if self.target_job_id is not None else "all professions"
         self.logger.info(
-            f"Starting harvesting in {area_name} / {subarea_name} (area_id={area_id}, subarea_id={sub_area_id})"
+            f"Starting harvesting in {area_name} / {subarea_name} "
+            f"(area_id={area_id}, subarea_id={sub_area_id}, job={target_job_name})"
         )
 
         self.is_stopped_at_new_map_condition = is_stopped_at_new_map_condition
-        self.map_ids_to_explore = get_map_ids_to_explore(self.random_farm_behavior.map_ids)
-        self.logger.info(
-            f"Will explore {len(self.map_ids_to_explore)} new maps in zone of {len(self.random_farm_behavior.map_ids)} total maps"
-        )
-
         self.random_farm_behavior.init_random_farm(
             area_id,
             sub_area_id,
@@ -85,7 +83,16 @@ class HarvesterBehavior(BaseFarmBehavior):
                 self.game_state.guild_chest.storage.get_all_items_by_gid(),
                 self.game_state.player.is_sub,
                 self.game_state.player.server_id,
+                target_job_id,
             ),
+        )
+        self.map_ids_to_explore = get_map_ids_to_explore(
+            self.random_farm_behavior.map_ids,
+            target_job_id,
+        )
+        self.logger.info(
+            f"Will explore {len(self.map_ids_to_explore)} new maps in zone of "
+            f"{len(self.random_farm_behavior.map_ids)} total maps for {target_job_name}"
         )
         self.init_listeners()
         if self.game_state.inventory.is_full_pods:
@@ -141,7 +148,7 @@ class HarvesterBehavior(BaseFarmBehavior):
             self.collect_behavior.start(
                 callback=self.on_collect_behavior_finished,
                 parent=self,
-                target_resource_item_ids=self.target_resource_item_ids,
+                target_job_id=self.target_job_id,
             )
         else:
             self.run_next_step()
