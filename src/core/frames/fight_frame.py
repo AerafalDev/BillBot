@@ -2,10 +2,13 @@ from dataclasses import dataclass
 
 from DBDofusUnity.datas.protos.non_obf.game.character_pb2 import CharacterCharacteristicsEvent
 from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import (
+    FightRemovableEffect,
     FightInvisibilityState,
 )
 from DBDofusUnity.datas.protos.non_obf.game.context_pb2 import ContextCreationEvent
 from DBDofusUnity.datas.protos.non_obf.game.fight_pb2 import (
+    FightEffectsEvent,
+    FightJoinRunningEvent,
     FightRefreshCharacterStatsEvent,
     FightSynchronizeEvent,
     FightTurnEvent,
@@ -30,6 +33,7 @@ from DBDofusUnity.datas.protos.non_obf.game.spell_pb2 import (
 from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
 from DBDofusUnity.dofus_unity_reader.game_constants.characteristic import CharacteristicEnum
 
+from src.core.engine.fights.effect import ADD_STATE_ACTION_ID
 from src.core.frames.frame import Frame
 
 
@@ -80,6 +84,18 @@ class FightFrame(Frame):
         self.event_manager.on(
             FightSynchronizeEvent,
             self.on_fight_synchronize_event,
+            originator=self,
+            priority=self.priority,
+        )
+        self.event_manager.on(
+            FightEffectsEvent,
+            self.on_fight_effects_event,
+            originator=self,
+            priority=self.priority,
+        )
+        self.event_manager.on(
+            FightJoinRunningEvent,
+            self.on_fight_join_running_event,
             originator=self,
             priority=self.priority,
         )
@@ -146,6 +162,12 @@ class FightFrame(Frame):
         self.game_state.fight.count_casted_by_spell_id_on_current_turn[message.spell_id] = (
             self.game_state.fight.count_casted_by_spell_id_on_current_turn.get(message.spell_id, 0) + 1
         )
+        target_actor = self.game_state.entity.get_first_actor_on_cell_id(message.cell)
+        if target_actor is not None:
+            target_key = (message.spell_id, target_actor.actor_id)
+            self.game_state.fight.count_casted_by_spell_id_and_target_id[target_key] = (
+                self.game_state.fight.count_casted_by_spell_id_and_target_id.get(target_key, 0) + 1
+            )
         self.game_state.fight.cast_turn_by_spell_id[message.spell_id] = self.game_state.fight.fight_turn
 
     def on_character_characteristics_event(self, message: CharacterCharacteristicsEvent):
@@ -167,6 +189,13 @@ class FightFrame(Frame):
         return msg
 
     def on_game_action_fight_event(self, msg: GameActionFightEvent):
+        if msg.HasField("mark_cells"):
+            self.game_state.fight.set_fight_mark(msg.mark_cells.mark)
+        if msg.HasField("unmark_cells"):
+            self.game_state.fight.remove_fight_mark(msg.unmark_cells.mark_id)
+        if msg.HasField("trigger_glyph_trap"):
+            self.game_state.fight.remove_fight_mark(msg.trigger_glyph_trap.mark_id)
+
         if msg.HasField("death") and (msg.death.target_id == self.game_state.player.character_id):
             hp_before = self.game_state.fight.life_point
             self.logger.info(
@@ -233,27 +262,33 @@ class FightFrame(Frame):
         player_id = self.game_state.player.character_id
 
         if msg.HasField("spell_remove"):
-            if msg.spell_remove.target_id != player_id:
+            removal = msg.spell_remove
+            complement = removal.WhichOneof("complement")
+            if removal.target_id == player_id:
+                if complement == "effect_remove":
+                    effect_uid = removal.effect_remove.effect
+                    self.game_state.fight.own_spell_id_by_effect_uid.pop(effect_uid, None)
+                    self.game_state.fight.own_state_id_by_effect_uid.pop(effect_uid, None)
+                elif complement == "spell_id":
+                    stale_uids = [
+                        uid
+                        for uid, spell_id in self.game_state.fight.own_spell_id_by_effect_uid.items()
+                        if spell_id == removal.spell_id
+                    ]
+                    for uid in stale_uids:
+                        del self.game_state.fight.own_spell_id_by_effect_uid[uid]
+                        self.game_state.fight.own_state_id_by_effect_uid.pop(uid, None)
+            elif complement == "effect_remove":
                 self.game_state.entity.remove_fight_actor_effect(
-                    msg.spell_remove.target_id, msg.spell_remove.effect_remove.effect
+                    removal.target_id, removal.effect_remove.effect
                 )
-            elif msg.spell_remove.WhichOneof("complement") == "effect_remove":
-                self.game_state.fight.own_spell_id_by_effect_uid.pop(
-                    msg.spell_remove.effect_remove.effect, None
+            elif complement == "spell_id":
+                self.game_state.entity.remove_fight_actor_spell_states(
+                    removal.target_id, removal.spell_id
                 )
-            elif msg.spell_remove.WhichOneof("complement") == "spell_id":
-                stale_uids = [
-                    uid
-                    for uid, spell_id in self.game_state.fight.own_spell_id_by_effect_uid.items()
-                    if spell_id == msg.spell_remove.spell_id
-                ]
-                for uid in stale_uids:
-                    del self.game_state.fight.own_spell_id_by_effect_uid[uid]
 
-        if msg.HasField("removable_effect") and msg.removable_effect.effect.target_id == player_id:
-            self.game_state.fight.own_spell_id_by_effect_uid[msg.removable_effect.effect.uid] = (
-                msg.removable_effect.effect.spell_id
-            )
+        if msg.HasField("removable_effect"):
+            self._track_removable_effect(msg.removable_effect.effect)
 
         if msg.HasField("invisibility") and msg.invisibility.target_id != player_id:
             self.game_state.entity.set_fight_actor_invisibility(
@@ -273,6 +308,45 @@ class FightFrame(Frame):
         hp_before = self.game_state.fight.life_point
         self.game_state.fight.sync_life_points_from_characteristics()
         self._log_life_resync("FightSynchronizeEvent", hp_before)
+
+    def on_fight_effects_event(self, msg: FightEffectsEvent) -> None:
+        self._track_removable_effect(msg.effect.effect)
+
+    def on_fight_join_running_event(self, msg: FightJoinRunningEvent) -> None:
+        self.game_state.fight.set_fight_marks(msg.marks)
+        for effect in msg.effects:
+            self._track_removable_effect(effect.effect)
+
+    def _track_removable_effect(self, active_effect: FightRemovableEffect) -> None:
+        player_id = self.game_state.player.character_id
+        if active_effect.target_id == player_id:
+            self.game_state.fight.own_spell_id_by_effect_uid[active_effect.uid] = active_effect.spell_id
+        if active_effect.effect_id != ADD_STATE_ACTION_ID:
+            return
+
+        state_id = DataReader().state_id_by_spell_and_effect_uid.get(
+            (active_effect.spell_id, active_effect.uid)
+        )
+        if state_id is None:
+            matching_state_ids = {
+                effect.value
+                for spell_lvl in DataReader().spell_lvl_by_spell_id.get(active_effect.spell_id, [])
+                for effect in (*spell_lvl.effects, *spell_lvl.criticalEffect)
+                if effect.effectId == ADD_STATE_ACTION_ID and effect.value > 0
+            }
+            if len(matching_state_ids) == 1:
+                state_id = next(iter(matching_state_ids))
+        if state_id is None:
+            return
+        if active_effect.target_id == player_id:
+            self.game_state.fight.own_state_id_by_effect_uid[active_effect.uid] = state_id
+        else:
+            self.game_state.entity.set_fight_actor_state(
+                active_effect.target_id,
+                active_effect.uid,
+                state_id,
+                active_effect.spell_id,
+            )
 
     def on_fight_refresh_character_stats_event(self, msg: FightRefreshCharacterStatsEvent):
         if self.game_state.player.character_id != msg.fighter_id:
@@ -305,6 +379,7 @@ class FightFrame(Frame):
 
     def on_fight_map_information_event(self, msg: FightMapInformationEvent):
         self.game_state.fight.count_casted_by_spell_id_on_current_turn.clear()
+        self.game_state.fight.count_casted_by_spell_id_and_target_id.clear()
         self.game_state.fight.cast_turn_by_spell_id.clear()
         self.game_state.fight.modifier_by_type_and_spell_id.clear()
         self.logger.debug("Fight start: cleared per-fight cooldown/cast tracking")
@@ -314,15 +389,18 @@ class FightFrame(Frame):
         self.game_state.fight.invisible_enemy_cell_ids.clear()
         if msg.character_id == self.game_state.player.character_id:
             self.game_state.fight.count_casted_by_spell_id_on_current_turn.clear()
+            self.game_state.fight.count_casted_by_spell_id_and_target_id.clear()
             self.game_state.fight.is_our_turn = True
             self.game_state.fight.fight_turn += 1
         else:
             self.game_state.fight.count_casted_by_spell_id_on_current_turn.clear()
+            self.game_state.fight.count_casted_by_spell_id_and_target_id.clear()
             self.game_state.fight.is_our_turn = False
 
     def on_map_complementary_information_event(self, msg: MapComplementaryInformationEvent):
         self.game_state.fight.modifier_by_type_and_spell_id.clear()
         self.game_state.fight.count_casted_by_spell_id_on_current_turn.clear()
+        self.game_state.fight.count_casted_by_spell_id_and_target_id.clear()
         self.game_state.fight.in_fight = False
         self.game_state.fight.fight_turn = 0
         self.game_state.fight.is_our_turn = False

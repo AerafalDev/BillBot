@@ -1,5 +1,6 @@
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import logging
 from typing import NamedTuple
 
 from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import SpellModifier, SpellModifierType
@@ -23,11 +24,22 @@ from src.core.engine.fights.attack.rejection_stat import RejectionStat
 from src.core.engine.fights.attack.spell_filter import get_valid_spells_for_turn
 from src.core.engine.fights.attack.weight_calculator import calculate_attack_weight
 from src.core.engine.fights.damage_calculator import DamageCalculator
+from src.core.engine.fights.effect import (
+    RUNE_PLACEMENT_ACTION_ID,
+    RUNE_TRIGGER_ACTION_ID,
+    can_target_enemy,
+    is_ap_mp_loss_effect,
+    is_erosion_effect,
+    is_fixed_neutral_damage_effect,
+    is_instant_kill_effect,
+    is_push_effect,
+    is_state_effect,
+    resolve_effect_damage_element,
+)
 from src.core.engine.fights.reachable_cells.fight_reachable_cells import (
     FightReachableCells,
 )
 from src.core.engine.fights.spell import (
-    does_spell_need_taken_cell,
     get_possible_mp_spell,
 )
 from src.core.engine.fights.spell_modifier import SpellModifiers
@@ -45,22 +57,41 @@ class BestAttack(NamedTuple):
     movable_mp: MapPoint
     spell_lvl: SpellLevelsRootItem
     targetable_mp: MapPoint
+    action_points: int
 
 
 class WeightCacheKey(NamedTuple):
     spell_lvl: SpellLevelsRootItem
+    effect: Effect
+    caster_mp: MapPoint
     direction: DirectionsEnum
     targetable_mp: MapPoint
+
+
+def _attack_rank_key(attack: BestAttack) -> tuple[float, int, float, int, int, int]:
+    distance = attack.targetable_mp.distance_to_map_point(attack.movable_mp)
+    return (
+        -attack.total_weight,
+        -attack.remaining_pm,
+        -distance,
+        attack.spell_lvl.spellId,
+        attack.targetable_mp.cell_id,
+        attack.movable_mp.cell_id,
+    )
 
 
 @dataclass
 class Attacker(ContextualLogger):
     fight_reachable_cells: FightReachableCells
     damage_calculator: DamageCalculator
+    _reported_effect_gaps: set[tuple[int, int, int, int, str]] = field(
+        init=False, default_factory=set[tuple[int, int, int, int, str]], repr=False
+    )
 
     def find_best_attack_from_mp(
         self, context: AttackContext
     ) -> tuple[MapPoint, SpellLevelsRootItem, MapPoint] | None:
+        self._log_unmodeled_enemy_effects(context)
         positions = get_positions(context)
         movable_mps = get_movable_mps(context, positions, self.fight_reachable_cells)
 
@@ -97,6 +128,57 @@ class Attacker(ContextualLogger):
 
         return None
 
+    def _log_unmodeled_enemy_effects(self, context: AttackContext) -> None:
+        new_gaps: list[str] = []
+        for spell in context.spells:
+            if not spell.spell_id:
+                continue
+            spell_lvl = DataReader().spell_lvl_by_spell_id[spell.spell_id][spell.spell_level - 1]
+            effects = (*spell_lvl.effects, *spell_lvl.criticalEffect)
+            for effect in effects:
+                if not can_target_enemy(effect):
+                    continue
+                data_effect = DataReader().effect_by_id[effect.effectId]
+                has_damage = (
+                    resolve_effect_damage_element(effect, context.primary_elem) is not None
+                    and (
+                        data_effect.characteristicOperator == ""
+                        or is_fixed_neutral_damage_effect(effect)
+                    )
+                )
+                if (
+                    has_damage
+                    or is_push_effect(effect)
+                    or is_instant_kill_effect(effect)
+                    or is_ap_mp_loss_effect(effect)
+                    or is_erosion_effect(effect)
+                    or is_state_effect(effect)
+                    or effect.effectId in {RUNE_PLACEMENT_ACTION_ID, RUNE_TRIGGER_ACTION_ID}
+                ):
+                    continue
+
+                signature = (
+                    spell.spell_id,
+                    effect.effectId,
+                    effect.order,
+                    effect.effectElement,
+                    effect.targetMask,
+                )
+                if signature in self._reported_effect_gaps:
+                    continue
+                self._reported_effect_gaps.add(signature)
+                new_gaps.append(
+                    f"spell={spell.spell_id}, effect={effect.effectId}, order={effect.order}, "
+                    f"element={effect.effectElement}, mask={effect.targetMask!r}, "
+                    f"characteristic={data_effect.characteristic}, "
+                    f"operator={data_effect.characteristicOperator!r}"
+                )
+
+        if new_gaps:
+            self.logger.debug(
+                "Enemy-target effects outside the combat evaluator: " + "; ".join(new_gaps)
+            )
+
     def _get_targetable_mps(
         self,
         movable_mp: MapPoint,
@@ -115,6 +197,7 @@ class Attacker(ContextualLogger):
             modifier_range_min=modifiers_map.get((spell_id, SpellModifierType.RANGE_MIN)),
             modifier_range_max=modifiers_map.get((spell_id, SpellModifierType.RANGE_MAX)),
             modifier_cast_line=modifiers_map.get((spell_id, SpellModifierType.CAST_LINE)),
+            modifier_range_boost=modifiers_map.get((spell_id, SpellModifierType.RANGE)),
         )
 
         if needs_taken_cell:
@@ -155,7 +238,7 @@ class Attacker(ContextualLogger):
             return None
 
         direction = movable_mp.orientation_to(targetable_mp)
-        weight_cache_key = WeightCacheKey(spell_lvl, direction, targetable_mp)
+        weight_cache_key = WeightCacheKey(spell_lvl, effect, movable_mp, direction, targetable_mp)
 
         if weight_cache_key not in weight_cache:
             impact_mps = zone_spell.get_mps(mp=targetable_mp, direction=direction)
@@ -168,6 +251,7 @@ class Attacker(ContextualLogger):
                 targetable_mp,
                 enemies_data,
                 modifiers,
+                movable_mp,
             )
         return weight_cache[weight_cache_key]
 
@@ -187,10 +271,12 @@ class Attacker(ContextualLogger):
         total_candidates = 0
         cast_rejection_stats: dict[RejectionStat, int] = defaultdict(int)
         spells_without_targets = 0
+        trace_candidates = self.logger.isEnabledFor(logging.DEBUG)
+        top_candidates: list[BestAttack] = []
 
         for spell_lvl, effect, modifiers in valid_spells_for_turn:
             zone_size = effect.zoneDescr.param1
-            needs_taken_cell = does_spell_need_taken_cell(spell_lvl) or zone_size == 0
+            needs_taken_cell = modifiers.needs_taken_cell or zone_size == 0
             zone_spell_factory = SpellShapeEnum(effect.zoneDescr.shape)
             spell_has_targets = False
 
@@ -233,23 +319,43 @@ class Attacker(ContextualLogger):
                     spell_has_targets = True
                     total_candidates += 1
 
+                    candidate = BestAttack(
+                        weight,
+                        remaining_pm,
+                        movable_mp,
+                        spell_lvl,
+                        targetable_mp,
+                        modifiers.ap_cost,
+                    )
+                    if trace_candidates and weight > 0:
+                        top_candidates.append(candidate)
+                        top_candidates.sort(key=_attack_rank_key)
+                        del top_candidates[5:]
+
                     if best_attack is None or self._is_better_attack(
                         weight,
                         remaining_pm,
                         movable_mp,
                         targetable_mp,
                         best_attack,
+                        spell_lvl,
                     ):
-                        best_attack = BestAttack(
-                            weight,
-                            remaining_pm,
-                            movable_mp,
-                            spell_lvl,
-                            targetable_mp,
-                        )
+                        best_attack = candidate
 
             if not spell_has_targets:
                 spells_without_targets += 1
+
+        if top_candidates:
+            self.logger.debug(
+                "Top attack candidates (score per AP): "
+                + "; ".join(
+                    f"{rank}. {I18N().name_by_id[DataReader().spell_by_id[item.spell_lvl.spellId].nameId]} "
+                    f"(spell={item.spell_lvl.spellId}, score={item.total_weight:.2f}, "
+                    f"AP={item.action_points}, target={item.targetable_mp.cell_id}, "
+                    f"from={item.movable_mp.cell_id}, remaining_PM={item.remaining_pm})"
+                    for rank, item in enumerate(top_candidates, start=1)
+                )
+            )
 
         return best_attack, total_candidates, spells_without_targets, cast_rejection_stats
 
@@ -263,8 +369,8 @@ class Attacker(ContextualLogger):
         best_spell: SpellLevelsRootItem | None = None
         best_weight = 0.0
         for spell_lvl, effect, modifiers in get_valid_heal_spells_for_turn(context):
-            effective = min(estimate_self_heal(effect, context), missing)
-            weight = effective / modifiers.ap_cost
+            effective = min(estimate_self_heal(effect, context, modifiers.heal_bonus), missing)
+            weight = effective / max(modifiers.ap_cost, 1)
             if weight > best_weight:
                 best_weight = weight
                 best_spell = spell_lvl
@@ -293,23 +399,35 @@ class Attacker(ContextualLogger):
         remaining_pm: int,
         from_mp: MapPoint,
         target_mp: MapPoint,
-        current_best: tuple[float, int, MapPoint, SpellLevelsRootItem, MapPoint],
+        current_best: BestAttack,
+        spell_lvl: SpellLevelsRootItem,
     ) -> bool:
-        if weight < current_best[0]:
+        if weight < current_best.total_weight:
             return False
 
-        if weight > current_best[0]:
+        if weight > current_best.total_weight:
             return True
 
-        if remaining_pm < current_best[1]:
+        if remaining_pm < current_best.remaining_pm:
             return False
 
-        if remaining_pm > current_best[1]:
+        if remaining_pm > current_best.remaining_pm:
             return True
 
-        current_distance = current_best[4].distance_to_map_point(current_best[2])
+        current_distance = current_best.targetable_mp.distance_to_map_point(current_best.movable_mp)
         new_distance = target_mp.distance_to_map_point(from_mp)
-        return new_distance > current_distance
+        if new_distance != current_distance:
+            return new_distance > current_distance
+
+        return (
+            spell_lvl.spellId,
+            target_mp.cell_id,
+            from_mp.cell_id,
+        ) < (
+            current_best.spell_lvl.spellId,
+            current_best.targetable_mp.cell_id,
+            current_best.movable_mp.cell_id,
+        )
 
     def _build_debug_info_on_no_attack(
         self,

@@ -150,9 +150,9 @@ class GameState:
             actor_fight_by_id,
         )
         player_fight_actor = actor_fight_by_id.get(self.player.character_id)
-        own_state_ids = (
-            player_fight_actor.state_ids if player_fight_actor is not None else frozenset[int]()
-        )
+        own_state_ids = frozenset(self.fight.own_state_id_by_effect_uid.values())
+        if player_fight_actor is not None:
+            own_state_ids |= player_fight_actor.state_ids
         own_active_stack_count_by_spell_id = self.fight.get_own_active_stack_count_by_spell_id()
         own_active_summon_count = self.fight.count_own_active_summons(
             self.player.character_id, actor_by_id, actor_fight_by_id
@@ -172,6 +172,9 @@ class GameState:
             primary_elem=self.fight.primary_elem,
             modifier_by_type_and_spell_id=self.fight.modifier_by_type_and_spell_id,
             count_casted_by_spell_id_on_current_turn=(self.fight.count_casted_by_spell_id_on_current_turn),
+            count_casted_by_spell_id_and_target_id=(
+                self.fight.count_casted_by_spell_id_and_target_id
+            ),
             cast_turn_by_spell_id=self.fight.cast_turn_by_spell_id,
             fight_turn=self.fight.fight_turn,
             characteristic_by_id=self.fight.characteristic_by_id,
@@ -184,6 +187,7 @@ class GameState:
             invisible_enemy_cell_ids=frozenset(self.fight.invisible_enemy_cell_ids),
             breed_id=self.fight.breed_id,
             own_state_ids=own_state_ids,
+            own_rune_elements_by_cell=self.fight.get_rune_elements_by_cell(self.player.character_id),
             own_active_stack_count_by_spell_id=own_active_stack_count_by_spell_id,
             own_active_summon_count=own_active_summon_count,
             max_active_summon_count=max_active_summon_count,

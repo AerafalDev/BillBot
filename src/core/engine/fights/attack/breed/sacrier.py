@@ -63,6 +63,7 @@ def _find_invocation(
             modifier_range_min=modifiers_map.get((spell_id, SpellModifierType.RANGE_MIN)),
             modifier_range_max=modifiers_map.get((spell_id, SpellModifierType.RANGE_MAX)),
             modifier_cast_line=modifiers_map.get((spell_id, SpellModifierType.CAST_LINE)),
+            modifier_range_boost=modifiers_map.get((spell_id, SpellModifierType.RANGE)),
         )
         for target_mp in candidate_mps:
             if target_mp in positions.entities_mp:

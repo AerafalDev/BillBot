@@ -9,7 +9,18 @@ from DBDofusUnity.dofus_unity_reader.models.datas.spell_levels_root import (
     Effect,
     SpellLevelsRootItem,
 )
-from src.core.engine.fights.effect import is_heal_effect, resolve_effect_element
+from DBDofusUnity.dofus_unity_reader.models.datas.zone_descr import ZoneDescr
+from src.core.engine.fights.effect import (
+    can_target_enemy,
+    is_fixed_neutral_damage_effect,
+    is_heal_effect,
+    is_instant_kill_effect,
+    is_ap_mp_loss_effect,
+    is_erosion_effect,
+    is_push_effect,
+    is_state_effect,
+    resolve_effect_damage_element,
+)
 from src.core.engine.fights.zones.cross import Cross
 from src.core.engine.fights.zones.lozenge import Lozenge
 
@@ -20,55 +31,46 @@ def get_max_range_spell(
     stat_po: int,
     spell_lvl: SpellLevelsRootItem,
     modifier_range_max: SpellModifier | None,
+    modifier_range_min: SpellModifier | None = None,
+    modifier_range_boost: SpellModifier | None = None,
 ) -> int:
-    if modifier_range_max:
-        range = modifier_range_max.context
-    else:
-        range = spell_lvl.range
+    range = spell_lvl.range + (modifier_range_max.context if modifier_range_max else 0)
+    min_range = get_min_range_spell(spell_lvl, modifier_range_min)
 
-    if (spell_lvl.m_flags & 64) != 0:
-        return range + stat_po
+    if (spell_lvl.m_flags & 64) != 0 or bool(
+        modifier_range_boost and modifier_range_boost.context > 0
+    ):
+        range += stat_po
 
-    return range
+    return max(range, min_range)
 
 
 def get_min_range_spell(spell_lvl: SpellLevelsRootItem, modifier_range_min: SpellModifier | None) -> int:
-    if modifier_range_min:
-        return modifier_range_min.context
-
-    return spell_lvl.minRange
+    return max(spell_lvl.minRange + (modifier_range_min.context if modifier_range_min else 0), 0)
 
 
 def get_ap_cost_spell(spell_lvl: SpellLevelsRootItem, modifier_ap_cost: SpellModifier | None) -> int:
-    if modifier_ap_cost:
-        return modifier_ap_cost.context
-
-    return spell_lvl.apCost
+    return max(spell_lvl.apCost - (modifier_ap_cost.context if modifier_ap_cost else 0), 0)
 
 
 def get_spell_max_cast_per_turn(
     spell_lvl: SpellLevelsRootItem, modifier_max_cast_per_turn: SpellModifier | None
 ):
-    if modifier_max_cast_per_turn:
-        return modifier_max_cast_per_turn.context
-    return spell_lvl.maxCastPerTurn
+    return spell_lvl.maxCastPerTurn + (
+        modifier_max_cast_per_turn.context if modifier_max_cast_per_turn else 0
+    )
 
 
 def get_spell_max_cast_per_target(
     spell_lvl: SpellLevelsRootItem, modifier_max_cast_per_target: SpellModifier | None
 ):
-    if modifier_max_cast_per_target:
-        return modifier_max_cast_per_target.context
-    return spell_lvl.maxCastPerTarget
+    return spell_lvl.maxCastPerTarget + (
+        modifier_max_cast_per_target.context if modifier_max_cast_per_target else 0
+    )
 
 
 def is_spell_cast_in_line(spell_lvl: SpellLevelsRootItem, modifier_cast_line: SpellModifier | None) -> bool:
-    if modifier_cast_line:
-        return bool(modifier_cast_line.context)
-
-    if (spell_lvl.m_flags & 1) != 0:
-        return True
-    return False
+    return (spell_lvl.m_flags & 1) != 0 or bool(modifier_cast_line and modifier_cast_line.context > 0)
 
 
 def is_spell_cast_in_diagonal(spell_lvl: SpellLevelsRootItem) -> bool:
@@ -77,16 +79,32 @@ def is_spell_cast_in_diagonal(spell_lvl: SpellLevelsRootItem) -> bool:
     return False
 
 
-def does_spell_need_taken_cell(spell_lvl: SpellLevelsRootItem) -> bool:
-    if (spell_lvl.m_flags & 16) != 0:
-        return True
-    return False
+def does_spell_need_free_cell(
+    spell_lvl: SpellLevelsRootItem, modifier_free_cell: SpellModifier | None = None
+) -> bool:
+    return (spell_lvl.m_flags & 8) != 0 or bool(modifier_free_cell and modifier_free_cell.context > 0)
 
 
-def does_spell_need_test_los(spell_lvl: SpellLevelsRootItem) -> bool:
-    if (spell_lvl.m_flags & 4) != 0:
-        return True
-    return False
+def does_spell_need_taken_cell(
+    spell_lvl: SpellLevelsRootItem, modifier_occupied_cell: SpellModifier | None = None
+) -> bool:
+    return (spell_lvl.m_flags & 16) != 0 or bool(
+        modifier_occupied_cell and modifier_occupied_cell.context > 0
+    )
+
+
+def does_spell_need_visible_entity(
+    spell_lvl: SpellLevelsRootItem, modifier_visible_target: SpellModifier | None = None
+) -> bool:
+    return (spell_lvl.m_flags & 32) != 0 or bool(
+        modifier_visible_target and modifier_visible_target.context > 0
+    )
+
+
+def does_spell_need_test_los(
+    spell_lvl: SpellLevelsRootItem, modifier_los: SpellModifier | None = None
+) -> bool:
+    return (spell_lvl.m_flags & 4) != 0 and not bool(modifier_los and modifier_los.context > 0)
 
 
 def get_possible_mp_spell(
@@ -96,9 +114,16 @@ def get_possible_mp_spell(
     modifier_range_min: SpellModifier | None,
     modifier_range_max: SpellModifier | None,
     modifier_cast_line: SpellModifier | None,
+    modifier_range_boost: SpellModifier | None = None,
 ) -> set[MapPoint]:
     min_range = get_min_range_spell(spell_lvl, modifier_range_min)
-    max_range = get_max_range_spell(stat_po, spell_lvl, modifier_range_max)
+    max_range = get_max_range_spell(
+        stat_po,
+        spell_lvl,
+        modifier_range_max,
+        modifier_range_min,
+        modifier_range_boost,
+    )
 
     if is_spell_cast_in_line(spell_lvl, modifier_cast_line):
         cross = Cross(shape=None, alternative_size=min_range, size=max_range)
@@ -120,7 +145,11 @@ def get_possible_mp_spell(
 
 
 def get_damage_spells(
-    spells: list[SpellItem], primary_elem: EffectElement
+    spells: list[SpellItem],
+    primary_elem: EffectElement,
+    *,
+    include_push_effects: bool = False,
+    include_tactical_effects: bool = False,
 ) -> list[tuple[SpellLevelsRootItem, Effect]]:
     spell_levels: list[tuple[SpellLevelsRootItem, Effect]] = []
     for spell in spells:
@@ -128,17 +157,34 @@ def get_damage_spells(
             continue
         spell_lvl = DataReader().spell_lvl_by_spell_id[spell.spell_id][spell.spell_level - 1]
 
-        if spell_lvl.statesCriterion != "":
-            continue
+        seen_zones: list[ZoneDescr] = []
         for effect in spell_lvl.effects:
             data_effect = DataReader().effect_by_id[effect.effectId]
-            if data_effect.characteristicOperator != "":
+            is_push = include_push_effects and is_push_effect(effect)
+            is_kill = include_tactical_effects and is_instant_kill_effect(effect)
+            is_point_loss = include_tactical_effects and is_ap_mp_loss_effect(effect)
+            is_erosion = include_tactical_effects and is_erosion_effect(effect)
+            is_state = include_tactical_effects and is_state_effect(effect)
+            if (
+                data_effect.characteristicOperator != ""
+                and not is_fixed_neutral_damage_effect(effect)
+                and not is_push
+                and not is_kill
+                and not is_point_loss
+                and not is_erosion
+                and not is_state
+            ):
                 continue
             if is_heal_effect(effect):
                 continue
-            if resolve_effect_element(effect.effectElement, primary_elem) is not None:
+            if not can_target_enemy(effect):
+                continue
+            has_damage = resolve_effect_damage_element(effect, primary_elem) is not None
+            if has_damage or is_push or is_kill or is_point_loss or is_erosion or is_state:
+                if effect.zoneDescr in seen_zones:
+                    continue
                 spell_levels.append((spell_lvl, effect))
-                break
+                seen_zones.append(effect.zoneDescr)
 
     return spell_levels
 

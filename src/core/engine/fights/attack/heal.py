@@ -18,16 +18,21 @@ HEAL_HP_THRESHOLD = 0.5
 EMERGENCY_HEAL_HP_THRESHOLD = 0.25
 
 
-def estimate_self_heal(effect: Effect, context: AttackContext) -> int:
+def estimate_self_heal(effect: Effect, context: AttackContext, spell_heal_bonus: int = 0) -> int:
     description_id = DataReader().effect_by_id[effect.effectId].descriptionId
-    heal_bonus = get_stat_by_id(context.characteristic_by_id.get(CharacteristicEnum.HEAL_BONUS))
+    heal_bonus = (
+        get_stat_by_id(context.characteristic_by_id.get(CharacteristicEnum.HEAL_BONUS))
+        + spell_heal_bonus
+    )
     base = base_roll(effect)
 
-    if description_id == DescriptionEnum.HEAL_PERCENT_MAX_LIFE:
+    if description_id == DescriptionEnum.HEAL_PERCENT_MAX_LIFE or effect.effectId == 1109:
         return math.floor(base / 100 * context.max_life_point + heal_bonus)
     if description_id == DescriptionEnum.HEAL_FLAT_LIFE:
         return math.floor(base + heal_bonus)
     if description_id == DescriptionEnum.BUFF_VITALITY:
+        return math.floor(base)
+    if effect.effectId in {143, 407}:
         return math.floor(base)
 
     intelligence = get_stat_by_id(context.characteristic_by_id.get(CharacteristicEnum.INTELLIGENCE))

@@ -58,6 +58,10 @@ from DBDofusUnity.dofus_unity_reader.models.datas.spell_levels_root import (
     SpellLevelsRoot,
     SpellLevelsRootItem,
 )
+from DBDofusUnity.dofus_unity_reader.models.datas.spellstatesroot import (
+    Spellstatesroot,
+    SpellstatesrootItem,
+)
 from DBDofusUnity.dofus_unity_reader.models.datas.spell_variants_root import (
     SpellVariantsRoot,
     SpellVariantsRootItem,
@@ -79,6 +83,7 @@ FILEPATH_BY_MODEL: dict[Any, str] = {
     Queststepsroot: "QuestStepsDataRoot.json",
     SkillsRoot: "SkillsDataRoot.json",
     SpellLevelsRoot: "SpellLevelsDataRoot.json",
+    Spellstatesroot: "SpellStatesDataRoot.json",
     SpellsRoot: "SpellsDataRoot.json",
     SpellVariantsRoot: "SpellVariantsDataRoot.json",
     SubAreasRoot: "SubAreasDataRoot.json",
@@ -370,6 +375,24 @@ class DataReader(metaclass=Singleton):
             spell_levels_by_spell_id[spell_lvl.spellId].sort(key=lambda spell_lvl: spell_lvl.minPlayerLevel)
 
         return spell_levels_by_spell_id
+
+    @cached_property
+    def spell_state_by_id(self) -> dict[int, SpellstatesrootItem]:
+        bundle_path = _data_file_path(Spellstatesroot)
+        if not bundle_path.is_file():
+            return {}
+        data = _load_model(Spellstatesroot, Spellstatesroot)
+        return {state.id: state for state in data}
+
+    @cached_property
+    def state_id_by_spell_and_effect_uid(self) -> dict[tuple[int, int], int]:
+        return {
+            (spell_id, effect.effectUid): effect.value
+            for spell_id, spell_levels in self.spell_lvl_by_spell_id.items()
+            for spell_lvl in spell_levels
+            for effect in (*spell_lvl.effects, *spell_lvl.criticalEffect)
+            if effect.effectId == 950 and effect.effectUid > 0 and effect.value > 0
+        }
 
     @cached_property
     def dungeon_by_id(self) -> dict[int, DungeonsRootItem]:

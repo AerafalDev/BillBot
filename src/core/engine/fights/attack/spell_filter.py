@@ -10,6 +10,7 @@ from src.core.engine.contexts import AttackContext
 from src.core.engine.fights.attack.rejection_stat import RejectionStat
 from src.core.engine.fights.spell import get_damage_spells
 from src.core.engine.fights.spell_modifier import SpellModifiers
+from src.core.engine.fights.state_criterion import is_spell_state_criterion_satisfied
 from src.services.logging_utils.loggers import BotLogger
 
 
@@ -17,7 +18,12 @@ def get_valid_spells_for_turn(
     context: AttackContext,
     logger: BotLogger,
 ) -> list[tuple[SpellLevelsRootItem, Effect, SpellModifiers]]:
-    valuable_spells = get_damage_spells(context.spells, context.primary_elem)
+    valuable_spells = get_damage_spells(
+        context.spells,
+        context.primary_elem,
+        include_push_effects=True,
+        include_tactical_effects=True,
+    )
 
     rejection_stats: dict[RejectionStat, int] = defaultdict(int)
 
@@ -93,17 +99,23 @@ def is_spell_valid_for_turn(
 ) -> bool:
     current_ap = context.action_points
 
+    if spell_lvl.statesCriterion and not is_spell_state_criterion_satisfied(
+        spell_lvl.statesCriterion, context.own_state_ids
+    ):
+        rejection_stats[RejectionStat.STATE_CRITERION] += 1
+        return False
+
     if modifiers.ap_cost > current_ap:
         rejection_stats[RejectionStat.INSUFICIENT_AP] += 1
         return False
 
-    if spell_lvl.initialCooldown != 0 and context.fight_turn <= spell_lvl.initialCooldown:
+    if spell_lvl.initialCooldown > 0 and context.fight_turn <= spell_lvl.initialCooldown:
         rejection_stats[RejectionStat.INITIAL_COOLDOWN] += 1
         return False
 
     last_cast_turn = context.cast_turn_by_spell_id.get(spell_lvl.spellId)
     if (
-        spell_lvl.globalCooldown != 0
+        spell_lvl.globalCooldown > 0
         and last_cast_turn is not None
         and context.fight_turn - last_cast_turn < spell_lvl.globalCooldown
     ):
@@ -111,9 +123,9 @@ def is_spell_valid_for_turn(
         return False
 
     if (
-        spell_lvl.minCastInterval != 0
-        and last_cast_turn is not None
-        and context.fight_turn - last_cast_turn < spell_lvl.minCastInterval
+        last_cast_turn is not None
+        and modifiers.min_cast_interval > 0
+        and context.fight_turn - last_cast_turn < modifiers.min_cast_interval
     ):
         rejection_stats[RejectionStat.MIN_CAST_INTERVAL] += 1
         return False
@@ -121,7 +133,7 @@ def is_spell_valid_for_turn(
     count_casted = context.count_casted_by_spell_id_on_current_turn.get(spell_lvl.spellId)
     if (
         count_casted is not None
-        and modifiers.max_cast_per_turn != 0
+        and modifiers.max_cast_per_turn > 0
         and modifiers.max_cast_per_turn <= count_casted
     ):
         rejection_stats[RejectionStat.MAX_CAST_PER_TURN] += 1

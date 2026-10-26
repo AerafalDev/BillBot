@@ -1,11 +1,12 @@
 import dataclasses
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import (
     ActorPositionInformation,
     CharacterCharacteristic,
+    FightMark,
     SpellModifier,
     SpellModifierType,
 )
@@ -19,13 +20,20 @@ from DBDofusUnity.dofus_unity_reader.game_constants.characteristic import (
 from DBDofusUnity.dofus_unity_reader.grid.map_point import MapPoint
 from src.core import config
 from src.core.engine.fights.attack.enemy_data import EnemyData, get_monster_max_spell_range
-from src.core.engine.fights.effect import get_effect_elem_by_stat
+from src.core.engine.fights.effect import get_effect_elem_by_stat, get_rune_element_for_spell
 from src.core.engine.fights.stats.characteristic import get_stat_by_id
 from src.core.engine.monsters.monster_group import MonsterFighter
 from src.core.signals.player_signals import GameInfoSignals
 from src.core.states.entity_state import EntityState, FightActor
 from src.core.states.player_state import PlayerState
 from src.core.states.state import State
+
+
+@dataclass(frozen=True)
+class FightRuneMark:
+    author_id: int
+    spell_id: int
+    cell_ids: frozenset[int]
 
 
 @dataclass
@@ -44,9 +52,16 @@ class FightState(State):
     count_casted_by_spell_id_on_current_turn: dict[int, int] = dataclasses.field(
         init=False, default_factory=lambda: defaultdict(int)
     )
+    count_casted_by_spell_id_and_target_id: dict[tuple[int, int], int] = dataclasses.field(
+        init=False, default_factory=lambda: defaultdict(int)
+    )
 
     cast_turn_by_spell_id: dict[int, int] = dataclasses.field(init=False, default_factory=dict[int, int])
     own_spell_id_by_effect_uid: dict[int, int] = dataclasses.field(init=False, default_factory=dict[int, int])
+    own_state_id_by_effect_uid: dict[int, int] = dataclasses.field(init=False, default_factory=dict[int, int])
+    rune_mark_by_id: dict[int, FightRuneMark] = dataclasses.field(
+        init=False, default_factory=dict[int, FightRuneMark]
+    )
     characteristic_by_id: dict[int, CharacterCharacteristic] = dataclasses.field(
         init=False, default_factory=dict[int, CharacterCharacteristic]
     )
@@ -63,12 +78,50 @@ class FightState(State):
         self.spells.clear()
         self.modifier_by_type_and_spell_id.clear()
         self.count_casted_by_spell_id_on_current_turn.clear()
+        self.count_casted_by_spell_id_and_target_id.clear()
         self.cast_turn_by_spell_id.clear()
         self.own_spell_id_by_effect_uid.clear()
+        self.own_state_id_by_effect_uid.clear()
+        self.rune_mark_by_id.clear()
         self.characteristic_by_id.clear()
         self.in_fight = False
         self.fight_turn = 0
         self.invisible_enemy_cell_ids.clear()
+
+    def set_fight_mark(self, mark: FightMark) -> None:
+        if mark.mark_type != FightMark.MarkType.RUNE or not mark.active:
+            self.rune_mark_by_id.pop(mark.mark_id, None)
+            return
+
+        cell_ids = frozenset(cell.id for cell in mark.cells)
+        if not cell_ids:
+            self.rune_mark_by_id.pop(mark.mark_id, None)
+            return
+        self.rune_mark_by_id[mark.mark_id] = FightRuneMark(
+            author_id=mark.author_id,
+            spell_id=mark.spell_id,
+            cell_ids=cell_ids,
+        )
+
+    def set_fight_marks(self, marks: Iterable[FightMark]) -> None:
+        self.rune_mark_by_id.clear()
+        for mark in marks:
+            self.set_fight_mark(mark)
+
+    def remove_fight_mark(self, mark_id: int) -> None:
+        self.rune_mark_by_id.pop(mark_id, None)
+
+    def get_rune_elements_by_cell(self, author_id: int) -> dict[int, frozenset[EffectElement]]:
+        elements_by_cell: dict[int, set[EffectElement]] = defaultdict(set)
+        for mark in self.rune_mark_by_id.values():
+            if mark.author_id != author_id:
+                continue
+            element = get_rune_element_for_spell(mark.spell_id, self.primary_elem)
+            if element is None:
+                continue
+            for cell_id in mark.cell_ids:
+                elements_by_cell[cell_id].add(element)
+        return {cell_id: frozenset(elements) for cell_id, elements in elements_by_cell.items()}
 
     def add_invisible_enemy_cell(self, cell_id: int) -> None:
         self.invisible_enemy_cell_ids.add(cell_id)
@@ -340,6 +393,10 @@ class FightState(State):
             monster = DataReader().monsters_by_id[monster_id]
             monster_grade = monster.grades[monster_info.creature_grade - 1]
             max_life_point = monster_grade.lifePoints
+            enemy_characteristic_by_id = {
+                characteristic.characteristic_id: characteristic
+                for characteristic in enemy.actor_information.fighter.stats.characteristics
+            }
 
             enemies_data.append(
                 EnemyData(
@@ -351,6 +408,10 @@ class FightState(State):
                     monster_grade=monster_grade,
                     invisibility=actor_fight.invisibility,
                     state_ids=actor_fight.state_ids,
+                    permanent_damage_percent=get_stat_by_id(
+                        enemy_characteristic_by_id.get(CharacteristicEnum.PERMANENT_DAMAGE_PERCENT)
+                    ),
+                    characteristic_by_id=enemy_characteristic_by_id,
                     movement_points=monster_grade.movementPoints,
                     max_spell_range=get_monster_max_spell_range(monster, monster_grade),
                 )

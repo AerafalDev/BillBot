@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 
 from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import (
     ActorPositionInformation,
+    CharacterCharacteristic,
     FightInvisibilityState,
 )
 from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
@@ -32,10 +33,34 @@ class EnemyData:
     max_spell_range: int
     invisibility: FightInvisibilityState = FightInvisibilityState.VISIBLE
     state_ids: frozenset[int] = field(default_factory=frozenset[int])
+    permanent_damage_percent: int = 0
+    characteristic_by_id: dict[int, CharacterCharacteristic] = field(
+        default_factory=dict[int, CharacterCharacteristic]
+    )
 
     @property
     def is_invulnerable(self) -> bool:
-        return bool(self.state_ids & FULLY_INVULNERABLE_STATE_IDS)
+        if not self.state_ids:
+            return False
+        if self.state_ids & FULLY_INVULNERABLE_STATE_IDS:
+            return True
+        spell_state_by_id = DataReader().spell_state_by_id
+        return any(
+            bool(spell_state_by_id.get(state_id) and spell_state_by_id[state_id].invulnerable)
+            for state_id in self.state_ids
+        )
+
+    def is_invulnerable_for(self, is_melee: bool) -> bool:
+        if self.is_invulnerable:
+            return True
+        spell_state_by_id = DataReader().spell_state_by_id
+        return any(
+            bool(
+                (state := spell_state_by_id.get(state_id))
+                and (state.invulnerableMelee if is_melee else state.invulnerableRange)
+            )
+            for state_id in self.state_ids
+        )
 
     @property
     def is_hidden(self) -> bool:

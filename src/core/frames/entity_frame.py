@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import (
     ActorPositionInformation,
-    Direction,
     SpawnInformation,
 )
 from DBDofusUnity.datas.protos.non_obf.game.context_pb2 import (
@@ -234,66 +233,89 @@ class EntityFrame(Frame):
                     )
                     self.game_state.entity.set_actor(related_actor_pos_information, True)
         elif msg.HasField("slide"):
-            old_cell_id = self.game_state.entity.actor_by_id[msg.slide.target_id].disposition.cell_id
-            direction = self.game_state.entity.actor_by_id[msg.slide.target_id].disposition.direction
-
-            if old_cell_id == msg.slide.start_cell:
-                self.game_state.entity.update_actor_disposition(
-                    msg.slide.target_id,
-                    direction=direction,
-                    cell_id=msg.slide.end_cell,
-                )
-            else:
-                self.game_state.entity.update_actor_disposition(
-                    msg.slide.target_id,
-                    direction=direction,
-                    cell_id=msg.slide.start_cell,
-                )
+            actor = self.game_state.entity.actor_by_id.get(msg.slide.target_id)
+            if actor is None:
+                self.logger.warning(f"Slide event targets unknown actor {msg.slide.target_id}")
+                return
+            # Reapply the final cell so an earlier disposition update cannot roll the actor back.
+            self.game_state.entity.update_actor_disposition(
+                msg.slide.target_id,
+                direction=actor.disposition.direction,
+                cell_id=msg.slide.end_cell,
+            )
 
         elif msg.HasField("exchange_positions"):
             if msg.exchange_positions.caster_cell_id == msg.exchange_positions.target_cell_id:
                 return
-            source_cell_id = self.game_state.entity.actor_by_id[msg.source_id].disposition.cell_id
-            if not msg.exchange_positions.caster_cell_id == source_cell_id:
-                msg.exchange_positions.target_cell_id = msg.exchange_positions.caster_cell_id
-                msg.exchange_positions.caster_cell_id = source_cell_id
+            caster = self.game_state.entity.actor_by_id.get(msg.source_id)
+            target = self.game_state.entity.actor_by_id.get(msg.exchange_positions.target_id)
+            if caster is None or target is None:
+                self.logger.warning(
+                    "Exchange event references unknown actors: "
+                    f"caster_id={msg.source_id}, target_id={msg.exchange_positions.target_id}"
+                )
+                return
 
-            target_direction = self.game_state.entity.actor_by_id[
-                msg.exchange_positions.target_id
-            ].disposition.direction
-            caster_direction = self.game_state.entity.actor_by_id[msg.source_id].disposition.direction
-
+            # The event cells are the two pre-swap cells; assigning both destinations is idempotent.
             self.game_state.entity.update_actor_disposition(
                 msg.exchange_positions.target_id,
-                direction=target_direction,
+                direction=target.disposition.direction,
                 cell_id=msg.exchange_positions.caster_cell_id,
             )
             self.game_state.entity.update_actor_disposition(
                 msg.source_id,
-                direction=caster_direction,
+                direction=caster.disposition.direction,
                 cell_id=msg.exchange_positions.target_cell_id,
             )
         elif msg.HasField("teleport_on_same_map"):
-            if msg.teleport_on_same_map.target_id in self.game_state.entity.actor_by_id:
-                target_direction = self.game_state.entity.actor_by_id[
-                    msg.teleport_on_same_map.target_id
-                ].disposition.direction
-            else:
-                target_direction = Direction.DIRECTION_EAST
-            self.game_state.entity.update_actor_disposition(
-                cell_id=msg.teleport_on_same_map.cell,
-                direction=target_direction,
-                actor_id=msg.teleport_on_same_map.target_id,
+            self._update_fight_actor_cell(
+                msg.teleport_on_same_map.target_id,
+                msg.teleport_on_same_map.cell,
+                "teleport",
             )
+        elif msg.HasField("carry_character"):
+            self._update_fight_actor_cell(
+                msg.carry_character.target_id,
+                msg.carry_character.cell,
+                "carry",
+            )
+        elif msg.HasField("throw_character"):
+            self._update_fight_actor_cell(
+                msg.throw_character.target_id,
+                msg.throw_character.cell,
+                "throw",
+            )
+        elif msg.HasField("drop_character"):
+            self._update_fight_actor_cell(
+                msg.drop_character.target_id,
+                msg.drop_character.cell,
+                "drop",
+            )
+
+    def _update_fight_actor_cell(self, actor_id: int, cell_id: int, action: str) -> None:
+        actor = self.game_state.entity.actor_by_id.get(actor_id)
+        if actor is None:
+            self.logger.warning(
+                f"Fight {action} event targets unknown actor {actor_id}; position update skipped"
+            )
+            return
+        self.game_state.entity.update_actor_disposition(
+            actor_id,
+            actor.disposition.direction,
+            cell_id,
+        )
 
     def on_fight_fighter_refresh_event(self, msg: FightFighterRefreshEvent):
         if not msg.HasField("information"):
             return
-        self.game_state.entity.update_actor_disposition(
-            msg.information.actor_id,
-            msg.information.disposition.direction,
-            msg.information.disposition.cell_id,
-        )
+        if msg.information.actor_information.HasField("fighter"):
+            self.game_state.entity.set_actor(msg.information)
+        else:
+            self.game_state.entity.update_actor_disposition(
+                msg.information.actor_id,
+                msg.information.disposition.direction,
+                msg.information.disposition.cell_id,
+            )
 
     def on_fight_synchronize_event(self, msg: FightSynchronizeEvent):
         for fighter in msg.fighters:

@@ -23,10 +23,27 @@ def estimate_collision_damage(
     push_damage_bonus: int,
 ) -> int:
     """Mirror PushUtils.GetCollisionDamage with zero push resistance."""
+    _, moved = estimate_push_endpoint(
+        caster_mp, enemy_mp, push_distance, map_id, occupied_cell_ids
+    )
+    blocked = push_distance - moved
+    if blocked <= 0:
+        return 0
+    return blocked * (player_level // 2 + 32 + push_damage_bonus) // 4
+
+
+def estimate_push_endpoint(
+    caster_mp: MapPoint,
+    enemy_mp: MapPoint,
+    push_distance: int,
+    map_id: int,
+    occupied_cell_ids: set[int],
+) -> tuple[MapPoint, int]:
+    """Return the reachable endpoint and distance for a straight push."""
     dx = enemy_mp.x - caster_mp.x
     dy = enemy_mp.y - caster_mp.y
     if dx == 0 and dy == 0:
-        return 0
+        return enemy_mp, 0
     step_x, step_y = (_sign(dx), 0) if abs(dx) >= abs(dy) else (0, _sign(dy))
 
     moved = 0
@@ -38,7 +55,4 @@ def estimate_collision_damage(
         current = nxt
         moved += 1
 
-    blocked = push_distance - moved
-    if blocked <= 0:
-        return 0
-    return blocked * (player_level // 2 + 32 + push_damage_bonus) // 4
+    return current, moved
