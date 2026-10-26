@@ -2,6 +2,7 @@ from DBDofusUnity.datas.protos.non_obf.game.common_pb2 import ObjectItemInventor
 from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 
 from src.consts import FAKE_INFINITY_VALUE
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.engine.weights.harvester.weight_collectable import (
     get_map_id_collectable_weight,
 )
@@ -15,6 +16,7 @@ def get_harvester_additional_weight_by_map_id(
     is_sub: bool,
     server_id: int,
     target_job_id: JobEnum | None = None,
+    resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
 ):
     if map_id in map_ids_to_explore:
         return FAKE_INFINITY_VALUE
@@ -25,5 +27,6 @@ def get_harvester_additional_weight_by_map_id(
         is_sub,
         server_id,
         target_job_id,
+        resource_filter,
     )
     return weight

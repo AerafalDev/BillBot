@@ -319,6 +319,7 @@ class BotFactory:
             event_manager=event_manager,
             game_state=game_state,
             path_finding=path_finding,
+            grid_signals=grid_signals,
             _logger=logger,
         )
         map_move_cancel_behavior = MapMovementCancelBehavior(

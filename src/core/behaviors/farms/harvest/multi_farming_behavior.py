@@ -10,6 +10,7 @@ from DBDofusUnity.datas.protos.non_obf.game.gamemap_pb2 import (
 
 from src.core.behaviors.farms.fight.attacker_behavior import AttackerBehavior
 from src.core.behaviors.farms.harvest.harvester_behavior import HarvesterBehavior
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.config import get_time_between_attacker
 
 
@@ -25,6 +26,7 @@ class MultiFarmingBehavior(HarvesterBehavior):
         sub_area_id: int | None,
         is_stopped_at_new_map_condition: Callable[[], bool] | None = None,
         target_job_id: JobEnum | None = None,
+        resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
     ) -> None:
         self._next_time_attacker = datetime.now() + get_time_between_attacker(self.game_state.settings.do_fighter)
         return super().run(
@@ -32,6 +34,7 @@ class MultiFarmingBehavior(HarvesterBehavior):
             sub_area_id,
             is_stopped_at_new_map_condition,
             target_job_id,
+            resource_filter,
         )
 
     def on_new_map(self):

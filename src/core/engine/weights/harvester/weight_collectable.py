@@ -16,6 +16,7 @@ from DBDofusUnity.dofus_unity_reader.game_constants.map_id import (
 
 from src.controller.game_data import GameDataController
 from src.core.config import WEIGHT_BY_JOB
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.engine.monsters.drops import get_rare_gid_with_weight_from_protector_drop
 from src.core.engine.movements.map.map_tools import MapTools
 
@@ -43,6 +44,7 @@ def get_map_id_collectable_weight(
     is_sub: bool,
     server_id: int = 1,
     target_job_id: JobEnum | None = None,
+    resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
 ) -> float:
     item_job_by_gfx = GameDataController().get_item_job_by_gfx()
     weight_map: float = 0
@@ -62,6 +64,8 @@ def get_map_id_collectable_weight(
             continue
         item_id, job_id = info
         if target_job_id is not None and job_id != target_job_id:
+            continue
+        if not resource_filter.allows(item_id):
             continue
         item = DataReader().item_by_id[item_id]
         job_lvl = player_job_lvl_by_id.get(job_id, 1)

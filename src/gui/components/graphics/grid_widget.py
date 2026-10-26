@@ -24,6 +24,7 @@ _DEFAULT_COLOR = QColor(Qt.GlobalColor.white)
 _ACTOR_COLOR = QColor(Qt.GlobalColor.red)
 _STATED_COLOR = QColor(Qt.GlobalColor.green)
 _STATED_DOWN_COLOR = QColor(144, 238, 144)
+_DESTINATION_COLOR = QColor("#00A7FF")
 _PATH_START_COLOR = QColor(Qt.GlobalColor.white)
 _PATH_END_COLOR = QColor(Qt.GlobalColor.red)
 _PATH_TREATED_COLOR = QColor(Qt.GlobalColor.green)
@@ -92,6 +93,7 @@ class GridView(QWidget):
         self._cell_color_by_id: dict[int, QColor] = {}
         self._state_by_cell_id = {cell_id: CellState() for cell_id in MAP_POINT_BY_CELL_ID}
         self._active_cell_ids: set[int] = set()
+        self._destination_cell_id: int | None = None
         self._font = QFont("Arial", 10)
         self._static_grid_picture = QPicture()
         self._rebuild_static_grid_picture()
@@ -106,6 +108,7 @@ class GridView(QWidget):
             profiled_slot(self.on_set_obstacle_on_cell_id_batch)
         )
         self.grid_signals.new_map_id.connect(profiled_slot(self.on_new_map_id))
+        self.grid_signals.destination_cell_changed.connect(profiled_slot(self.on_destination_cell_changed))
 
         if self.debug_signals:
             self.debug_signals.white_cell.connect(self.on_debug_white_cell)
@@ -142,6 +145,13 @@ class GridView(QWidget):
                 Qt.AlignmentFlag.AlignCenter,
                 str(cell_id),
             )
+        if self._destination_cell_id is not None:
+            x, y = MAP_POINT_BY_CELL_ID[self._destination_cell_id].pixel_coord
+            destination_pen = QPen(_DESTINATION_COLOR, 3)
+            destination_pen.setCosmetic(True)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(destination_pen)
+            painter.drawEllipse(QPointF(x, y), CIRCLE_CELL_SIZE + 5, CIRCLE_CELL_SIZE + 5)
         painter.end()
         super().paintEvent(a0)
 
@@ -221,9 +231,16 @@ class GridView(QWidget):
     @pyqtSlot(int)
     def on_new_map_id(self, map_id: int) -> None:
         self._map_id = map_id
+        self._destination_cell_id = None
         if self.isVisible():
             self._load_map_colors()
             self.update()
+
+    @pyqtSlot(object)
+    def on_destination_cell_changed(self, destination: object) -> None:
+        cell_id = destination.cell_id if isinstance(destination, MapPoint) else None
+        self._destination_cell_id = cell_id if cell_id in self._state_by_cell_id else None
+        self._request_visible_update()
 
     @pyqtSlot(list)
     def on_new_count_actor_on_cell_id_batch(self, items: list[tuple[int, int]]) -> None:

@@ -24,6 +24,7 @@ from qfluentwidgets.components.navigation.navigation_widget import NavigationWid
 from qfluentwidgets.components.widgets.tool_tip import ToolTipFilter
 
 from src.consts import RESOURCE_FOLDER
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.signals.bot_signals import BotSignals
 
 
@@ -227,7 +228,7 @@ class SidebarItem(NavigationWidget):
 
     def on_click_play(self) -> None:
         self.bot_signals.play.emit(True)
-        self.bot_signals.play_auto_bot.emit()
+        self.bot_signals.play_auto_bot.emit(None, HarvestResourceFilter())
 
     def on_click_stop(self) -> None:
         self.bot_signals.stop.emit()

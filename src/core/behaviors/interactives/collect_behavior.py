@@ -22,6 +22,7 @@ from src.core.config import (
     SUBSEQUENT_COLLECT_MOVEMENT_CANCEL_PROBABILITY,
 )
 from src.core.engine.interactives.collectable import Collectable
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.engine.movements.map.path_finding.movement_path import MovementPath
 from src.core.engine.movements.map.path_finding.path_finding import Pathfinding
 from src.services.human_timings import HumanTimingsService
@@ -44,10 +45,16 @@ class CollectBehavior(Behavior):
 
     excluded_element_ids: set[int] = field(init=False, default_factory=set[int])
     target_job_id: JobEnum | None = field(init=False, default=None)
+    resource_filter: HarvestResourceFilter = field(init=False, default_factory=HarvestResourceFilter)
 
-    def run(self, target_job_id: JobEnum | None = None) -> None:
+    def run(
+        self,
+        target_job_id: JobEnum | None = None,
+        resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
+    ) -> None:
         self.excluded_element_ids.clear()
         self.target_job_id = target_job_id
+        self.resource_filter = resource_filter
         self.is_first_action = True
         self.is_first_collect = True
         self.collect_map()
@@ -57,11 +64,12 @@ class CollectBehavior(Behavior):
             return self.finish(CollectError.FULL_PODS)
 
         collectables = self.game_state.interactive.get_farmable_collectables(self.excluded_element_ids)
-        if self.target_job_id is not None:
+        if self.target_job_id is not None or self.resource_filter.is_active:
             collectables = [
                 collectable
                 for collectable in collectables
-                if collectable.job_id == self.target_job_id
+                if (self.target_job_id is None or collectable.job_id == self.target_job_id)
+                and self.resource_filter.allows(collectable.resource_item_id)
             ]
         if len(collectables) == 0:
             return self.finish()

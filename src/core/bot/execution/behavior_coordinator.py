@@ -21,6 +21,7 @@ from src.core.behaviors.farms.fight.fight_behavior import FightBehavior
 from src.core.behaviors.farms.fight.fighter_behavior import FighterBehavior
 from src.core.behaviors.farms.harvest.harvester_behavior import HarvesterBehavior
 from src.core.events_manager.event_manager import EventManager
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.signals.bot_signals import BotSignals
 from src.core.signals.shared_farm_signals import SharedSignals
 from src.core.states.player_state import PlayerState
@@ -90,6 +91,7 @@ class BehaviorCoordinator(ContextualLogger):
         area_id: int | None,
         sub_area_id: int | None,
         job_id: int | None,
+        resource_filter: HarvestResourceFilter,
     ):
         target_job_id = JobEnum(job_id) if job_id is not None else None
         self.play_action(
@@ -99,6 +101,7 @@ class BehaviorCoordinator(ContextualLogger):
                 area_id=area_id,
                 sub_area_id=sub_area_id,
                 target_job_id=target_job_id,
+                resource_filter=resource_filter,
             )
         )
 
@@ -116,14 +119,17 @@ class BehaviorCoordinator(ContextualLogger):
             )
         )
 
-    def on_play_auto_bot(self):
+    def on_play_auto_bot(self, job_id: int | None, resource_filter: HarvestResourceFilter):
         self.bot_signals.automation_status_changed.emit("Preparing automatic mode…")
+        target_job_id = JobEnum(job_id) if job_id is not None else None
         self.play_action(
             lambda _progress_callback: self.auto_bot_behavior.start(
                 callback=lambda *_args: self.bot_signals.stop.emit(),
                 parent=None,
                 area_id=None,
                 sub_area_id=None,
+                target_job_id=target_job_id,
+                resource_filter=resource_filter,
             )
         )
 
@@ -155,7 +161,7 @@ class BehaviorCoordinator(ContextualLogger):
     def guess_bot_action(self) -> None:
         config = self.get_bot_config()
         if config is not None and config.schedule_profile is not None:
-            self.bot_signals.play_auto_bot.emit()
+            self.bot_signals.play_auto_bot.emit(None, HarvestResourceFilter())
 
     def stop_behaviors(self) -> None:
         with self.event_manager.lock:

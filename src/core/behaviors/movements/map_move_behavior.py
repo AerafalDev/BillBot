@@ -22,6 +22,7 @@ from DBDofusUnity.dofus_unity_reader.grid.map_point import MapPoint
 from src.core.behaviors.behavior import Behavior
 from src.core.engine.movements.map.path_finding.movement_path import MovementPath
 from src.core.engine.movements.map.path_finding.path_finding import Pathfinding
+from src.core.signals.grid_signals import GridSignals
 
 CLIENT_CONFIRM_OVERHEAD = 0.040
 WATCHED_ACTOR_MOVED_REDIRECT_DELAY = (0.15, 0.35)
@@ -40,6 +41,7 @@ class MapMoveError(StrEnum):
 @dataclass
 class MapMoveBehavior(Behavior):
     path_finding: Pathfinding
+    grid_signals: GridSignals | None = None
 
     _cell_is_taken: bool = field(init=False, default=False)
     _pending_fight_movement_action_id: int | None = field(init=False, default=None)
@@ -47,6 +49,8 @@ class MapMoveBehavior(Behavior):
 
     def run(self, move_path: MovementPath, watch_actor_id: int | None = None) -> None:
         self.logger.info(f"Going to : {move_path.end}")
+        if self.grid_signals is not None:
+            self.grid_signals.destination_cell_changed.emit(move_path.end)
         self._watch_actor_id = watch_actor_id
         if self.game_state.map.is_waiting_for_map_popup_dialog_leave:
             self.logger.info("Waiting for map popup dialog to close before moving")
@@ -62,6 +66,11 @@ class MapMoveBehavior(Behavior):
             return
 
         self.ensure_dialog_closed(lambda: self.move_along(move_path))
+
+    def stop(self) -> None:
+        if self.grid_signals is not None:
+            self.grid_signals.destination_cell_changed.emit(None)
+        super().stop()
 
     def move_along(self, move_path: MovementPath) -> None:
         if self.game_state.map.map_point != move_path.start:

@@ -5,6 +5,7 @@ from functools import partial
 from threading import RLock
 
 from DBDofusUnity.dofus_unity_reader.data_center.area_info import AreaInfo
+from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 from src.core.behaviors.craft.craft_behavior import CraftBehavior, CraftRequest
 from src.core.behaviors.farms.base_farm_behavior import BaseFarmingErrorCode
 from src.core.behaviors.farms.fight.fighter_behavior import FighterBehavior
@@ -22,6 +23,7 @@ from src.core.bot.session_activity_plan import SessionActivity, SessionActivityP
 from src.core.config import get_time_beween_areas
 from src.controller.settings import SettingsService
 from src.core.engine.contexts import HarvesterAreaContext
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.engine.crafts.recipes import (
     get_recipes_for_job_lvl_up_or_benefice,
     is_not_valid_recipe_for_lvl_up_job_or_benefice,
@@ -57,6 +59,8 @@ class AutoBotBehavior(RecoverableBehavior):
     _sub_area_id: int | None = field(init=False, default=None)
     _previous_area_info_played: list[AreaInfo] = field(init=False, default_factory=list[AreaInfo])
     _session_activity_plan: SessionActivityPlan | None = field(init=False, default=None)
+    _target_job_id: JobEnum | None = field(init=False, default=None)
+    _resource_filter: HarvestResourceFilter = field(init=False, default_factory=HarvestResourceFilter)
 
     def start_planned_session(self, session_start: datetime, session_end: datetime) -> None:
         self.game_state.apply_settings(SettingsService().get().behaviors)
@@ -91,22 +95,37 @@ class AutoBotBehavior(RecoverableBehavior):
             player_jobs_lvl_by_id=self.game_state.player.jobs_lvl_by_id,
             bank_storage_by_gid=self.game_state.inventory.get_bank_objects_by_gid(),
             current_area_infos_by_server_and_character=(CURRENT_AREAS_PLAYING_INFOS_BY_SERVER_AND_CHARACTER),
+            target_job_id=self._target_job_id,
+            resource_filter=self._resource_filter,
         )
 
     def run(
         self,
         area_id: int | None = None,
         sub_area_id: int | None = None,
+        target_job_id: JobEnum | None = None,
+        resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
     ) -> None:
-        self.ensure_free_to_act(lambda: self.start_playing(area_id=area_id, sub_area_id=sub_area_id))
+        self.ensure_free_to_act(
+            lambda: self.start_playing(
+                area_id=area_id,
+                sub_area_id=sub_area_id,
+                target_job_id=target_job_id,
+                resource_filter=resource_filter,
+            )
+        )
 
     def start_playing(
         self,
         area_id: int | None = None,
         sub_area_id: int | None = None,
+        target_job_id: JobEnum | None = None,
+        resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
     ) -> None:
         self._area_id = area_id
         self._sub_area_id = sub_area_id
+        self._target_job_id = target_job_id
+        self._resource_filter = resource_filter
         if self.game_state.inventory.is_full_pods:
             return self.play()
         self.auto_equipment_behavior.start(callback=self.on_initial_auto_equipment_finished, parent=self)
@@ -152,6 +171,8 @@ class AutoBotBehavior(RecoverableBehavior):
             area_id=area_info.area_id,
             sub_area_id=area_info.sub_area_id,
             is_stopped_at_new_map_condition=stop_multi_farming_condition,
+            target_job_id=self._target_job_id,
+            resource_filter=self._resource_filter,
             callback=self.on_multi_farming_behavior_finished,
             parent=self,
         )

@@ -60,6 +60,19 @@ def get_resource_item_ids_by_job_id() -> dict[int, frozenset[int]]:
     }
 
 
+@cache
+def get_job_ids_by_resource_item_id() -> dict[int, frozenset[JobEnum]]:
+    job_ids_by_resource_item_id: defaultdict[int, set[JobEnum]] = defaultdict(set)
+    for job_id, item_ids in get_resource_item_ids_by_job_id().items():
+        for item_id in item_ids:
+            job_ids_by_resource_item_id[item_id].add(JobEnum(job_id))
+
+    return {
+        item_id: frozenset(job_ids)
+        for item_id, job_ids in job_ids_by_resource_item_id.items()
+    }
+
+
 def get_stated_element_collectable(
     stated_element: StatedElement,
     interactive_element_by_id: dict[int, InteractiveElement],

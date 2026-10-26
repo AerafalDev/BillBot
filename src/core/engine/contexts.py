@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -14,9 +14,11 @@ from DBDofusUnity.datas.protos.non_obf.game.gamemap_pb2 import MapObstacle
 from DBDofusUnity.datas.protos.non_obf.game.spell_pb2 import SpellItem
 from DBDofusUnity.dofus_unity_reader.data_center.area_info import AreaInfo
 from DBDofusUnity.dofus_unity_reader.game_constants.characteristic import EffectElement
+from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 from DBDofusUnity.dofus_unity_reader.grid.map_point import MapPoint
 from DBDofusUnity.dofus_unity_reader.models.datas.map_positions_root import MapInformationRootItem
 from DBDofusUnity.dofus_unity_reader.models.world_graph import Transition, Vertice
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 
 if TYPE_CHECKING:
     from src.core.engine.fights.attack.enemy_data import EnemyData
@@ -106,3 +108,5 @@ class HarvesterAreaContext:
     player_jobs_lvl_by_id: Mapping[int, int]
     bank_storage_by_gid: Mapping[int, ObjectItemInventory]
     current_area_infos_by_server_and_character: Mapping[tuple[int, int], AreaInfo]
+    target_job_id: JobEnum | None = None
+    resource_filter: HarvestResourceFilter = field(default_factory=HarvestResourceFilter)

@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 from qfluentwidgets import (
     ComboBox,
     FluentIcon,
+    PushButton,
     SegmentedWidget,
     TransparentToolButton,
 )
@@ -16,7 +17,12 @@ from DBDofusUnity.dofus_unity_reader.game_constants.job import HARVESTER_JOB_IDS
 from src.core import config
 from src.core.behaviors.behavior_factory import USABLE_BEHAVIORS
 from src.core.bot.bot import Bot
+from src.core.engine.interactives.harvest_resource_filter import (
+    HarvestResourceFilter,
+    HarvestResourceFilterMode,
+)
 from src.gui.pages.farmer.bank_tab import BankTab
+from src.gui.pages.farmer.harvest_resource_filter_dialog import HarvestResourceFilterDialog
 from src.gui.pages.farmer.inventory_tab import InventoryTab
 from src.gui.pages.farmer.map_tab import MapTab
 from src.gui.pages.farmer.player_tab import PlayerTab
@@ -59,6 +65,7 @@ class FarmerWidget(QWidget):
         self.world_tab: WorldTab | None = None
         self.inventory_tab: InventoryTab | None = None
         self.bank_tab: BankTab | None = None
+        self.harvest_resource_filter = HarvestResourceFilter()
 
         self.init_top_content()
 
@@ -110,6 +117,10 @@ class FarmerWidget(QWidget):
                 I18N().name_by_id.get(job.nameId, "Unknown"),
                 userData=job_id,
             )
+        self.harvest_job_combo.setToolTip("Limit harvesting to one profession")
+
+        self.harvest_filter_button = PushButton("Resource filter: all", top_widget)
+        self.harvest_filter_button.clicked.connect(self.on_edit_harvest_filter)
 
         self.area_farm_combo = ComboBox(top_widget)
         self.area_farm_combo.addItem("")
@@ -125,6 +136,7 @@ class FarmerWidget(QWidget):
 
         top_widget_layout.addWidget(self.sub_area_farm_combo)
         top_widget_layout.addWidget(self.harvest_job_combo)
+        top_widget_layout.addWidget(self.harvest_filter_button)
 
         self._v_layout.addWidget(top_widget)
 
@@ -145,11 +157,13 @@ class FarmerWidget(QWidget):
         ]:
             self.area_farm_combo.setHidden(True)
             self.sub_area_farm_combo.setHidden(True)
-            self.harvest_job_combo.setHidden(True)
         else:
             self.area_farm_combo.setHidden(False)
             self.sub_area_farm_combo.setHidden(False)
-            self.harvest_job_combo.setHidden(current_action != FarmActionEnum.HARVESTER)
+
+        is_harvesting_action = current_action in [FarmActionEnum.HARVESTER, FarmActionEnum.AUTO]
+        self.harvest_job_combo.setHidden(not is_harvesting_action)
+        self.harvest_filter_button.setHidden(not is_harvesting_action)
 
         if current_action in [CraftActionEnum.CRAFTER]:
             self.play_btn.setDisabled(True)
@@ -177,11 +191,19 @@ class FarmerWidget(QWidget):
         sub_area_id = self.sub_area_farm_combo.currentData()
         self.bot.bot_signals.play.emit(True)
         if self.type_action_combo.currentText() == FarmActionEnum.HARVESTER:
-            self.bot.bot_signals.play_harvester.emit(area_id, sub_area_id, self.harvest_job_combo.currentData())
+            self.bot.bot_signals.play_harvester.emit(
+                area_id,
+                sub_area_id,
+                self.harvest_job_combo.currentData(),
+                self.harvest_resource_filter,
+            )
         elif self.type_action_combo.currentText() == FarmActionEnum.FIGHTER:
             self.bot.bot_signals.play_fighter.emit(area_id, sub_area_id)
         elif self.type_action_combo.currentText() == FarmActionEnum.AUTO:
-            self.bot.bot_signals.play_auto_bot.emit()
+            self.bot.bot_signals.play_auto_bot.emit(
+                self.harvest_job_combo.currentData(),
+                self.harvest_resource_filter,
+            )
         elif self.type_action_combo.currentText() not in FarmActionEnum:
             self.bot.bot_signals.play_usable_behavior.emit(self.type_action_combo.currentText())
 
@@ -193,16 +215,20 @@ class FarmerWidget(QWidget):
         self.area_farm_combo.setDisabled(True)
         self.sub_area_farm_combo.setDisabled(True)
         self.harvest_job_combo.setDisabled(True)
+        self.harvest_filter_button.setDisabled(True)
 
-    @pyqtSlot(object, object, object)
+    @pyqtSlot(object, object, object, object)
     def on_play_harvester(
         self,
         area_id: int | None,
         sub_area_id: int | None,
         job_id: JobEnum | None,
+        resource_filter: HarvestResourceFilter,
     ) -> None:
         self.type_action_combo.setCurrentText(FarmActionEnum.HARVESTER)
         self.harvest_job_combo.setCurrentIndex(self.harvest_job_combo.findData(job_id))
+        self.harvest_resource_filter = resource_filter
+        self.update_harvest_filter_button()
         self.on_played_zone(area_id, sub_area_id)
 
     @pyqtSlot(object, object)
@@ -210,9 +236,12 @@ class FarmerWidget(QWidget):
         self.type_action_combo.setCurrentText(FarmActionEnum.FIGHTER)
         self.on_played_zone(area_id, sub_area_id)
 
-    @pyqtSlot()
-    def on_play_auto(self) -> None:
+    @pyqtSlot(object, object)
+    def on_play_auto(self, job_id: JobEnum | None, resource_filter: HarvestResourceFilter) -> None:
         self.type_action_combo.setCurrentText(FarmActionEnum.AUTO)
+        self.harvest_job_combo.setCurrentIndex(self.harvest_job_combo.findData(job_id))
+        self.harvest_resource_filter = resource_filter
+        self.update_harvest_filter_button()
         self.on_played_zone(None, None)
 
     @pyqtSlot(object)
@@ -242,6 +271,22 @@ class FarmerWidget(QWidget):
         self.area_farm_combo.setDisabled(False)
         self.sub_area_farm_combo.setDisabled(False)
         self.harvest_job_combo.setDisabled(False)
+        self.harvest_filter_button.setDisabled(False)
+
+    @pyqtSlot()
+    def on_edit_harvest_filter(self) -> None:
+        dialog = HarvestResourceFilterDialog(self.harvest_resource_filter, self)
+        if dialog.exec():
+            self.harvest_resource_filter = dialog.get_resource_filter()
+            self.update_harvest_filter_button()
+
+    def update_harvest_filter_button(self) -> None:
+        resource_filter = self.harvest_resource_filter
+        if resource_filter.mode is HarvestResourceFilterMode.ALL:
+            self.harvest_filter_button.setText("Resource filter: all")
+        else:
+            label = "Include" if resource_filter.mode is HarvestResourceFilterMode.INCLUDE else "Exclude"
+            self.harvest_filter_button.setText(f"{label} resources ({len(resource_filter.item_ids)})")
 
     @pyqtSlot()
     def on_click_stop(self) -> None:

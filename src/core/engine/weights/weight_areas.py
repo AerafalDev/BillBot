@@ -9,8 +9,11 @@ from DBDofusUnity.dofus_unity_reader.data_center.area_info import (
     AreaInfo,
 )
 from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
+from DBDofusUnity.dofus_unity_reader.game_constants.job import JobEnum
 from src.controller.game_data import GameDataController
 from src.core.engine.contexts import HarvesterAreaContext
+from src.core.engine.interactives.collectable import get_job_ids_by_resource_item_id
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.engine.weights.harvester.weight_collectable import (
     get_weight_collectable,
 )
@@ -24,10 +27,41 @@ def get_fast_weight_harvester_sub_area(
     is_sub: bool,
     job_id_by_item_id: dict[int, int],
     server_id: int = 1,
+    target_job_id: JobEnum | None = None,
+    resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
 ) -> float:
     harvestables = DataReader().sub_area_by_id[sub_area_id].harvestables
     if not harvestables:
         return 0
+
+    if target_job_id is not None or resource_filter.is_active:
+        job_ids_by_item_id = get_job_ids_by_resource_item_id()
+        filtered_harvestables = [
+            item_id
+            for item_id in harvestables
+            if resource_filter.allows(item_id)
+            and (
+                target_job_id is None
+                or target_job_id in job_ids_by_item_id.get(item_id, frozenset())
+            )
+        ]
+        if not filtered_harvestables:
+            return 0
+
+        weight = sum(
+            get_weight_collectable(
+                job_id,
+                job_lvl_by_id.get(job_id, 1),
+                item_id,
+                storage_by_gid,
+                is_sub,
+                server_id,
+            )
+            for item_id in filtered_harvestables
+            for job_id in job_ids_by_item_id.get(item_id, frozenset())
+            if target_job_id is None or job_id == target_job_id
+        )
+        return weight / len(filtered_harvestables)
 
     weight = sum(
         get_weight_collectable(
@@ -110,6 +144,8 @@ def get_random_best_area_info(
                 context.player_is_sub,
                 job_id_by_item_id,
                 server_id,
+                context.target_job_id,
+                context.resource_filter,
             )
         else:
             weight = sum(
@@ -120,6 +156,8 @@ def get_random_best_area_info(
                     context.player_is_sub,
                     job_id_by_item_id,
                     server_id,
+                    context.target_job_id,
+                    context.resource_filter,
                 )
                 for sub_area_id in DataReader().sub_areas_by_area_id[area_info.area_id]
             )

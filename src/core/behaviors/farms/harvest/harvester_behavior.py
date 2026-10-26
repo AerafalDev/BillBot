@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum, auto
 
 from context_pb2 import ContextCreationEvent
 
@@ -19,16 +20,25 @@ from src.core.behaviors.interactives.collect_behavior import (
     CollectBehavior,
     CollectError,
 )
+from src.core.engine.interactives.harvest_resource_filter import HarvestResourceFilter
 from src.core.behaviors.movements.auto_trip.auto_trip_behavior import (
     AutoTripErrorCode,
 )
 from src.core.behaviors.movements.edge_behavior import EdgeError
 from src.core.behaviors.movements.map_change_behavior import MapChangeError
-from src.core.engine.weights.harvester.explorator import get_map_ids_to_explore
+from src.core.engine.weights.harvester.explorator import (
+    get_map_ids_for_harvest_target,
+    get_map_ids_to_explore,
+)
+from src.core.engine.weights.harvester.weight_collectable import get_map_id_collectable_weight
 from src.core.engine.weights.harvester.weight_map import (
     get_harvester_additional_weight_by_map_id,
 )
 from src.services.human_timings import HumanTimingsService
+
+
+class HarvesterErrorCode(StrEnum):
+    NO_MAPS_FOR_TARGET = auto()
 
 
 @dataclass
@@ -39,6 +49,7 @@ class HarvesterBehavior(BaseFarmBehavior):
 
     map_ids_to_explore: set[int] = field(init=False, default_factory=set[int])
     target_job_id: JobEnum | None = field(init=False, default=None)
+    resource_filter: HarvestResourceFilter = field(init=False, default_factory=HarvestResourceFilter)
 
     def run(
         self,
@@ -46,6 +57,7 @@ class HarvesterBehavior(BaseFarmBehavior):
         sub_area_id: int | None,
         is_stopped_at_new_map_condition: Callable[[], bool] | None = None,
         target_job_id: JobEnum | None = None,
+        resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
     ) -> None:
         self.ensure_free_to_act(
             lambda: self.start_harvesting(
@@ -53,6 +65,7 @@ class HarvesterBehavior(BaseFarmBehavior):
                 sub_area_id=sub_area_id,
                 is_stopped_at_new_map_condition=is_stopped_at_new_map_condition,
                 target_job_id=target_job_id,
+                resource_filter=resource_filter,
             )
         )
 
@@ -62,8 +75,10 @@ class HarvesterBehavior(BaseFarmBehavior):
         sub_area_id: int | None,
         is_stopped_at_new_map_condition: Callable[[], bool] | None = None,
         target_job_id: JobEnum | None = None,
+        resource_filter: HarvestResourceFilter = HarvestResourceFilter(),
     ) -> None:
         self.target_job_id = target_job_id
+        self.resource_filter = resource_filter
         area_name = DataReader().area_by_id[area_id].nameId if area_id else "Unknown"
         subarea_name = DataReader().sub_area_by_id[sub_area_id].nameId if sub_area_id else "Unknown"
         target_job_name = self.target_job_id.name if self.target_job_id is not None else "all professions"
@@ -73,6 +88,7 @@ class HarvesterBehavior(BaseFarmBehavior):
         )
 
         self.is_stopped_at_new_map_condition = is_stopped_at_new_map_condition
+        storage_by_gid = self.game_state.guild_chest.storage.get_all_items_by_gid()
         self.random_farm_behavior.init_random_farm(
             area_id,
             sub_area_id,
@@ -80,19 +96,67 @@ class HarvesterBehavior(BaseFarmBehavior):
                 map_id,
                 self.map_ids_to_explore,
                 self.game_state.player.jobs_lvl_by_id,
-                self.game_state.guild_chest.storage.get_all_items_by_gid(),
+                storage_by_gid,
                 self.game_state.player.is_sub,
                 self.game_state.player.server_id,
                 target_job_id,
+                self.resource_filter,
             ),
         )
-        self.map_ids_to_explore = get_map_ids_to_explore(
-            self.random_farm_behavior.map_ids,
-            target_job_id,
+        all_map_ids = self.random_farm_behavior.map_ids
+        has_harvest_target = target_job_id is not None or self.resource_filter.is_active
+        if has_harvest_target:
+            resource_area_map_ids = get_map_ids_for_harvest_target(
+                all_map_ids,
+                target_job_id,
+                self.resource_filter,
+            )
+            self.map_ids_to_explore = get_map_ids_to_explore(
+                resource_area_map_ids,
+                target_job_id,
+                self.resource_filter,
+            )
+            known_resource_map_ids = {
+                map_id
+                for map_id in resource_area_map_ids - self.map_ids_to_explore
+                if get_map_id_collectable_weight(
+                    map_id,
+                    self.game_state.player.jobs_lvl_by_id,
+                    storage_by_gid,
+                    self.game_state.player.is_sub,
+                    self.game_state.player.server_id,
+                    target_job_id,
+                    self.resource_filter,
+                )
+                > 0
+            }
+            route_map_ids = self.map_ids_to_explore | known_resource_map_ids
+        else:
+            self.map_ids_to_explore = get_map_ids_to_explore(
+                all_map_ids,
+                target_job_id,
+                self.resource_filter,
+            )
+            route_map_ids = all_map_ids
+
+        self.random_farm_behavior.map_ids = route_map_ids
+        if self.random_farm_behavior.map_ids != all_map_ids:
+            self.logger.info(
+                f"Filtered harvesting route from {len(all_map_ids)} area maps to "
+                f"{len(self.random_farm_behavior.map_ids)} maps with known or unexplored {target_job_name} resources "
+                f"({len(self.map_ids_to_explore)} unexplored)"
+            )
+        if not self.random_farm_behavior.map_ids:
+            self.logger.warning(f"No maps contain resources matching {target_job_name} and the active filter")
+            self.report_status("No maps match the selected profession and resource filter")
+            return self.finish(HarvesterErrorCode.NO_MAPS_FOR_TARGET)
+        self.logger.info(
+            f"Will explore {len(self.map_ids_to_explore)} new maps in target zone of "
+            f"{len(self.random_farm_behavior.map_ids)} resource maps for {target_job_name}"
         )
         self.logger.info(
-            f"Will explore {len(self.map_ids_to_explore)} new maps in zone of "
-            f"{len(self.random_farm_behavior.map_ids)} total maps for {target_job_name}"
+            f"Harvest resource filter: mode={self.resource_filter.mode}, "
+            f"selected_items={len(self.resource_filter.item_ids)}"
         )
         self.init_listeners()
         if self.game_state.inventory.is_full_pods:
@@ -149,6 +213,7 @@ class HarvesterBehavior(BaseFarmBehavior):
                 callback=self.on_collect_behavior_finished,
                 parent=self,
                 target_job_id=self.target_job_id,
+                resource_filter=self.resource_filter,
             )
         else:
             self.run_next_step()

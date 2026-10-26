@@ -1,6 +1,7 @@
 from functools import partial
 
 from DBDofusUnity.dofus_unity_reader.data_center.data_reader import DataReader
+from DBDofusUnity.dofus_unity_reader.grid.map_point import MapPoint
 from PyQt6.QtCore import pyqtSlot
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import SingleDirectionScrollArea, SmoothMode
@@ -44,6 +45,7 @@ class MapTab(QWidget):
         self.info_panel.setMaximumWidth(220)
         content_widget_layout.addWidget(self.info_panel, 0)
         self._connect_info_signals()
+        self.info_panel.on_received_property("", "Destination", "—")
 
         scroll_area_info.setSmoothMode(SmoothMode.NO_SMOOTH)
         scroll_area_info.setWidgetResizable(True)
@@ -53,6 +55,7 @@ class MapTab(QWidget):
         layout.addWidget(scroll_area_info)
 
         self.grid_signals.cell_id_clicked.connect(self.on_cell_id_clicked)
+        self.grid_signals.destination_cell_changed.connect(self.on_destination_cell_changed)
 
         if self.game_state.map.map_id != 0:
             self.on_map_id_changed(self.game_state.map.map_id)
@@ -94,6 +97,18 @@ class MapTab(QWidget):
         map_position = DataReader().map_info_by_map_id[map_id]
         self.info_panel.on_received_property("", "Map id", map_id)
         self.info_panel.on_received_property("", "Coordinates", f"({map_position.posX}, {map_position.posY})")
+        self.info_panel.on_received_property("", "Destination", "—")
+
+    @pyqtSlot(object)
+    def on_destination_cell_changed(self, destination: object) -> None:
+        if not isinstance(destination, MapPoint):
+            self.info_panel.on_received_property("", "Destination", "—")
+            return
+        self.info_panel.on_received_property(
+            "",
+            "Destination",
+            f"Cell {destination.cell_id} ({destination.x}, {destination.y})",
+        )
 
     @pyqtSlot(int)
     def on_cell_id_clicked(self, cell_id: int) -> None:
